@@ -1,0 +1,2041 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cisco → Mist Wired Assurance Converter</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #22263a;
+    --border: #2e3347;
+    --accent: #5c6ef8;
+    --accent2: #7c8cff;
+    --green: #3ecf8e;
+    --red: #f87171;
+    --yellow: #fbbf24;
+    --text: #e2e8f0;
+    --text-dim: #8892a4;
+    --text-dimmer: #4a5568;
+    --json-key: #7dd3fc;
+    --json-str: #86efac;
+    --json-num: #fcd34d;
+    --json-bool: #f9a8d4;
+    --radius: 10px;
+    --shadow: 0 4px 24px rgba(0,0,0,0.4);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ── Header ─────────────────────────────── */
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-shrink: 0;
+    z-index: 10;
+  }
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .logo-icon {
+    width: 36px; height: 36px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+  }
+  .logo-text h1 { font-size: 16px; font-weight: 700; letter-spacing: -0.3px; }
+  .logo-text p  { font-size: 11px; color: var(--text-dim); margin-top: 1px; }
+
+  .header-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+
+  .badge {
+    font-size: 10px; font-weight: 600;
+    padding: 3px 8px; border-radius: 99px;
+    background: rgba(92,110,248,0.15);
+    color: var(--accent2);
+    border: 1px solid rgba(92,110,248,0.3);
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+
+  /* ── Main layout ─────────────────────────── */
+  .main {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    flex: 1;
+    overflow: hidden;
+    gap: 0;
+  }
+
+  .panel {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--surface);
+  }
+  .panel:first-child { border-right: 1px solid var(--border); }
+
+  .panel-header {
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+    background: var(--surface2);
+  }
+  .panel-header .panel-title {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--text-dim);
+  }
+  .panel-header .panel-subtitle {
+    font-size: 11px;
+    color: var(--text-dimmer);
+    margin-left: auto;
+  }
+  .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--text-dimmer);
+  }
+  .dot.green { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .dot.blue  { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+
+  /* ── Input panel ─────────────────────────── */
+  .input-area {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .dropzone {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    border: 2px dashed var(--border);
+    border-radius: var(--radius);
+    margin: 16px;
+    padding: 32px;
+    cursor: pointer;
+    transition: all 0.2s;
+    background: rgba(255,255,255,0.01);
+    gap: 12px;
+  }
+  .dropzone:hover, .dropzone.dragover {
+    border-color: var(--accent);
+    background: rgba(92,110,248,0.05);
+  }
+  .dropzone-icon { font-size: 40px; }
+  .dropzone h3 { font-size: 15px; font-weight: 600; }
+  .dropzone p  { font-size: 12px; color: var(--text-dim); text-align: center; line-height: 1.5; }
+  .dropzone input[type=file] { display: none; }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    border-radius: 7px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    border: none;
+    transition: all 0.15s;
+  }
+  .btn-primary {
+    background: var(--accent);
+    color: #fff;
+  }
+  .btn-primary:hover { background: var(--accent2); }
+  .btn-secondary {
+    background: var(--surface2);
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+  .btn-secondary:hover { border-color: var(--accent); color: var(--accent2); }
+  .btn-success {
+    background: rgba(62,207,142,0.12);
+    color: var(--green);
+    border: 1px solid rgba(62,207,142,0.25);
+  }
+  .btn-success:hover { background: rgba(62,207,142,0.2); }
+  .btn-danger {
+    background: rgba(248,113,113,0.12);
+    color: var(--red);
+    border: 1px solid rgba(248,113,113,0.25);
+    font-size: 11px; padding: 5px 10px;
+  }
+
+  .textarea-wrapper {
+    display: none;
+    flex: 1;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 0 16px 16px;
+    gap: 10px;
+  }
+  .textarea-wrapper.visible { display: flex; }
+
+  .file-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: rgba(62,207,142,0.08);
+    border: 1px solid rgba(62,207,142,0.2);
+    border-radius: 7px;
+    font-size: 12px;
+  }
+  .file-info span { color: var(--green); font-weight: 600; }
+  .file-info .filename { color: var(--text); }
+  .file-info .clear-btn { margin-left: auto; }
+
+  textarea {
+    flex: 1;
+    background: #0d1018;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+    font-size: 11.5px;
+    line-height: 1.65;
+    padding: 14px;
+    resize: none;
+    outline: none;
+    tab-size: 2;
+  }
+  textarea:focus { border-color: var(--accent); }
+
+  .convert-bar {
+    padding: 12px 16px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+    background: var(--surface2);
+  }
+
+  .template-name-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+  }
+  .template-name-wrap label { font-size: 12px; color: var(--text-dim); white-space: nowrap; }
+  .template-name-wrap input {
+    flex: 1;
+    background: #0d1018;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 12px;
+    padding: 6px 10px;
+    outline: none;
+  }
+  .template-name-wrap input:focus { border-color: var(--accent); }
+
+  /* ── Output panel ────────────────────────── */
+  .output-area {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .output-placeholder {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    color: var(--text-dimmer);
+  }
+  .output-placeholder .ph-icon { font-size: 48px; opacity: 0.3; }
+  .output-placeholder p { font-size: 13px; }
+
+  .json-output {
+    display: none;
+    flex: 1;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .json-output.visible { display: flex; }
+
+  .stats-bar {
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-shrink: 0;
+    overflow-x: auto;
+  }
+  .stat {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  .stat-label { color: var(--text-dimmer); }
+  .stat-value { font-weight: 600; color: var(--text); }
+  .stat-value.green { color: var(--green); }
+  .stat-value.yellow { color: var(--yellow); }
+
+  .json-scroller {
+    flex: 1;
+    overflow: auto;
+    padding: 16px;
+    background: #0a0d14;
+  }
+
+  pre {
+    font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+    font-size: 11.5px;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+
+  /* JSON syntax highlighting */
+  .j-key  { color: var(--json-key); }
+  .j-str  { color: var(--json-str); }
+  .j-num  { color: var(--json-num); }
+  .j-bool { color: var(--json-bool); }
+  .j-null { color: var(--text-dimmer); }
+  .j-punct{ color: var(--text-dim); }
+
+  .output-actions {
+    padding: 10px 16px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+    background: var(--surface2);
+    flex-wrap: wrap;
+  }
+
+  /* ── Push to Mist drawer ──────────────────── */
+  .push-drawer {
+    display: none;
+    padding: 14px 16px;
+    border-top: 1px solid var(--border);
+    background: rgba(92,110,248,0.04);
+    gap: 10px;
+    flex-direction: column;
+    flex-shrink: 0;
+  }
+  .push-drawer.open { display: flex; }
+  .push-drawer h4 { font-size: 12px; color: var(--accent2); font-weight: 600; }
+  .push-fields {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .field-wrap { display: flex; flex-direction: column; gap: 4px; }
+  .field-wrap label { font-size: 11px; color: var(--text-dim); }
+  .field-wrap input, .field-wrap select {
+    background: #0d1018;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 12px;
+    padding: 7px 10px;
+    outline: none;
+    font-family: monospace;
+  }
+  .field-wrap input:focus, .field-wrap select:focus { border-color: var(--accent); }
+  .field-wrap select { cursor: pointer; }
+  .push-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .push-status {
+    font-size: 12px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    display: none;
+  }
+  .push-status.success { display: block; background: rgba(62,207,142,0.1); color: var(--green); border: 1px solid rgba(62,207,142,0.2); }
+  .push-status.error   { display: block; background: rgba(248,113,113,0.1); color: var(--red);   border: 1px solid rgba(248,113,113,0.2); }
+
+  .btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+    pointer-events: none;
+  }
+
+  /* ── Warnings ────────────────────────────── */
+  .warnings {
+    padding: 0 16px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .warning {
+    font-size: 11px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: rgba(251,191,36,0.08);
+    border: 1px solid rgba(251,191,36,0.2);
+    color: var(--yellow);
+  }
+  .info {
+    font-size: 11px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: rgba(62,207,142,0.07);
+    border: 1px solid rgba(62,207,142,0.2);
+    color: var(--green);
+  }
+
+  /* ── Tabs ────────────────────────────────── */
+  .tabs {
+    display: flex;
+    gap: 2px;
+    padding: 8px 16px 0;
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface2);
+  }
+  .tab {
+    padding: 7px 14px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-dimmer);
+    cursor: pointer;
+    border-radius: 6px 6px 0 0;
+    border: 1px solid transparent;
+    border-bottom: none;
+    transition: all 0.15s;
+    margin-bottom: -1px;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active {
+    background: #0a0d14;
+    border-color: var(--border);
+    border-bottom-color: #0a0d14;
+    color: var(--text);
+  }
+
+  .tab-content { display: none; flex: 1; overflow: hidden; flex-direction: column; }
+  .tab-content.active { display: flex; }
+
+  /* ── Port mapping table ──────────────────── */
+  .table-scroll { flex: 1; overflow: auto; padding: 16px; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11.5px;
+  }
+  th {
+    background: var(--surface2);
+    padding: 8px 12px;
+    text-align: left;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--text-dim);
+    border-bottom: 1px solid var(--border);
+    position: sticky; top: 0;
+  }
+  td {
+    padding: 7px 12px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    vertical-align: middle;
+  }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .tag-trunk { background: rgba(92,110,248,0.15); color: var(--accent2); }
+  .tag-access { background: rgba(62,207,142,0.12); color: var(--green); }
+  .tag-dot1x { background: rgba(251,191,36,0.12); color: var(--yellow); }
+  .tag-lacp { background: rgba(249,168,212,0.12); color: #f9a8d4; }
+  .tag-disabled { background: rgba(255,255,255,0.06); color: var(--text-dimmer); }
+  .tag-default { background: rgba(255,255,255,0.04); color: var(--text-dim); }
+
+  .iface-name { font-family: monospace; font-size: 11px; color: var(--text-dim); }
+  .usage-name { font-weight: 500; }
+
+  /* scrollbar */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-dimmer); }
+
+  /* toast */
+  .toast {
+    position: fixed;
+    bottom: 24px; right: 24px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 16px;
+    font-size: 13px;
+    display: flex; align-items: center; gap: 8px;
+    box-shadow: var(--shadow);
+    transform: translateY(80px);
+    opacity: 0;
+    transition: all 0.25s ease;
+    z-index: 100;
+  }
+  .toast.show { transform: translateY(0); opacity: 1; }
+  .toast.success { border-color: rgba(62,207,142,0.4); }
+  .toast.success .toast-icon { color: var(--green); }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<header>
+  <div class="logo">
+    <div class="logo-icon">⚡</div>
+    <div class="logo-text">
+      <h1>Cisco → Mist Converter</h1>
+      <p>Wired Assurance · Org-Level Switch Template</p>
+    </div>
+  </div>
+  <div class="header-actions">
+    <span class="badge">Wired Assurance</span>
+    <span class="badge" style="background:rgba(62,207,142,0.1);color:var(--green);border-color:rgba(62,207,142,0.3)">Client-Side · No Server</span>
+  </div>
+</header>
+
+<!-- Main -->
+<div class="main">
+
+  <!-- ── LEFT PANEL: Input ──────────────────── -->
+  <div class="panel">
+    <div class="panel-header">
+      <div class="dot" id="inputDot"></div>
+      <span class="panel-title">Cisco IOS Configuration</span>
+      <span class="panel-subtitle" id="inputSubtitle">Paste or upload a switch config</span>
+    </div>
+
+    <div class="input-area">
+      <!-- Dropzone -->
+      <div class="dropzone" id="dropzone">
+        <div class="dropzone-icon">📂</div>
+        <h3>Drop your Cisco config here</h3>
+        <p>Supports IOS 12.x · 15.x · 16.x · IOS-XE<br>Catalyst 2960 · 3560 · 3650 · 3850 · 9xxx</p>
+        <label class="btn btn-primary" style="margin-top:4px">
+          Browse file
+          <input type="file" id="fileInput" accept=".txt,.cfg,.conf,.log,.ios">
+        </label>
+        <p style="margin-top:4px;font-size:11px">or paste your config in the box below</p>
+      </div>
+
+      <!-- Textarea area (shown after file load or paste) -->
+      <div class="textarea-wrapper" id="textareaWrapper">
+        <div class="file-info" id="fileInfo" style="display:none">
+          <span>✓</span>
+          <span class="filename" id="fileName"></span>
+          <button class="btn btn-danger clear-btn" onclick="clearInput()">✕ Clear</button>
+        </div>
+        <textarea id="configInput" placeholder="Paste your Cisco IOS switch configuration here…" spellcheck="false"></textarea>
+      </div>
+    </div>
+
+    <!-- Convert bar -->
+    <div class="convert-bar">
+      <div class="template-name-wrap">
+        <label>Template name:</label>
+        <input type="text" id="templateName" value="Converted-from-Cisco" placeholder="e.g. Campus-LAN">
+      </div>
+      <button class="btn btn-primary" onclick="runConvert()">⚡ Convert</button>
+    </div>
+  </div>
+
+  <!-- ── RIGHT PANEL: Output ───────────────── -->
+  <div class="panel">
+    <div class="panel-header">
+      <div class="dot" id="outputDot"></div>
+      <span class="panel-title">Mist API Payload</span>
+      <span class="panel-subtitle" id="outputSubtitle">POST /api/v1/orgs/{org_id}/networktemplates</span>
+    </div>
+
+    <!-- Placeholder -->
+    <div class="output-placeholder" id="outputPlaceholder">
+      <div class="ph-icon">🔄</div>
+      <p>Upload or paste a Cisco config, then click Convert</p>
+    </div>
+
+    <!-- JSON output -->
+    <div class="json-output" id="jsonOutput">
+      <!-- Tabs -->
+      <div class="tabs">
+        <div class="tab active" onclick="switchTab('json', this)">JSON Payload</div>
+        <div class="tab" onclick="switchTab('ports', this)">Port Mapping</div>
+        <div class="tab" onclick="switchTab('summary', this)">Summary</div>
+      </div>
+
+      <!-- JSON tab -->
+      <div class="tab-content active" id="tab-json">
+        <div class="stats-bar" id="statsBar"></div>
+        <div id="warningsContainer" class="warnings"></div>
+        <div class="json-scroller">
+          <pre id="jsonPre"></pre>
+        </div>
+      </div>
+
+      <!-- Port mapping tab -->
+      <div class="tab-content" id="tab-ports">
+        <div class="table-scroll">
+          <table id="portTable">
+            <thead>
+              <tr>
+                <th>Cisco Interface</th>
+                <th>Junos Name</th>
+                <th>Mode</th>
+                <th>Usage Profile</th>
+                <th>VLAN(s)</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody id="portTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Summary tab -->
+      <div class="tab-content" id="tab-summary">
+        <div class="table-scroll">
+          <div id="summaryContent" style="font-size:13px;line-height:1.8;"></div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Actions — always visible at bottom of right panel -->
+    <div class="output-actions">
+      <button class="btn btn-success" id="copyBtn" onclick="copyJSON()" disabled>📋 Copy JSON</button>
+      <button class="btn btn-secondary" id="downloadBtn" onclick="downloadJSON()" disabled>⬇ Download .json</button>
+      <button class="btn btn-secondary" id="pushToggleBtn" onclick="togglePushDrawer()" disabled>🚀 Push to Mist API</button>
+    </div>
+
+    <!-- Push to Mist drawer — always in DOM, opens on button click -->
+    <div class="push-drawer" id="pushDrawer">
+      <h4>🔐 Push to Mist — Create Org Switch Template</h4>
+      <div class="push-fields">
+        <div class="field-wrap">
+          <label>Org ID</label>
+          <input type="text" id="orgId" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+        </div>
+        <div class="field-wrap">
+          <label>API Token</label>
+          <input type="password" id="apiToken" placeholder="Mist API token">
+        </div>
+        <div class="field-wrap">
+          <label>Cloud Region</label>
+          <select id="baseUrl">
+            <option value="https://api.mist.com"     selected>Global 01 — api.mist.com (default)</option>
+            <option value="https://api.gc1.mist.com">Global 02 — api.gc1.mist.com</option>
+            <option value="https://api.ac2.mist.com">Global 03 — api.ac2.mist.com</option>
+            <option value="https://api.gc2.mist.com">Global 04 — api.gc2.mist.com</option>
+            <option value="https://api.gc4.mist.com">Global 05 — api.gc4.mist.com</option>
+            <option value="https://api.eu.mist.com"> EMEA 01  — api.eu.mist.com</option>
+            <option value="https://api.gc3.mist.com"> EMEA 02  — api.gc3.mist.com</option>
+            <option value="https://api.ac6.mist.com"> EMEA 03  — api.ac6.mist.com</option>
+            <option value="https://api.gc6.mist.com"> EMEA 04  — api.gc6.mist.com</option>
+            <option value="https://api.ac5.mist.com"> APAC 01  — api.ac5.mist.com</option>
+            <option value="https://api.gc5.mist.com"> APAC 02  — api.gc5.mist.com</option>
+            <option value="https://api.gc7.mist.com"> APAC 03  — api.gc7.mist.com</option>
+          </select>
+        </div>
+        <div class="field-wrap">
+          <label>Template ID (optional — PUT to update existing)</label>
+          <input type="text" id="templateId" placeholder="Leave blank to create new (POST)">
+        </div>
+      </div>
+      <!-- CORS warning — shown automatically when page is opened as file:// -->
+      <div id="corsWarning" style="display:none;font-size:11.5px;padding:8px 12px;border-radius:6px;
+           background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.25);color:var(--yellow);
+           line-height:1.6;margin-bottom:6px">
+        ⚠ <strong>CORS Notice:</strong> This page is open as a local file (<code>file://</code>).
+        Browsers block direct API calls from local files, so Test Connection and Push Now will fail.<br>
+        <strong>Fix:</strong> In the same folder run
+        <code style="background:rgba(0,0,0,0.3);padding:1px 5px;border-radius:3px">python3 -m http.server 8080</code>
+        then open <code style="background:rgba(0,0,0,0.3);padding:1px 5px;border-radius:3px">http://localhost:8080/cisco-to-mist.html</code>.
+        Or use <strong>Copy as cURL</strong> to push from your terminal instead.
+      </div>
+      <div class="push-row">
+        <button class="btn btn-secondary" onclick="testConnection()">🔍 Test Connection</button>
+        <button class="btn btn-primary" onclick="pushToMist()">🚀 Push Now</button>
+        <button class="btn btn-secondary" id="curlBtn" onclick="copyCurl()" disabled>⌨ Copy as cURL</button>
+        <div class="push-status" id="pushStatus"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast">
+  <span class="toast-icon" id="toastIcon">✓</span>
+  <span id="toastMsg"></span>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════
+//  CISCO → MIST CONVERTER  (client-side JavaScript)
+// ═══════════════════════════════════════════════════════════════
+
+// ── Helpers ────────────────────────────────────────────────────
+
+function expandVlanRange(str) {
+  const result = [];
+  for (const part of str.split(',')) {
+    const t = part.trim();
+    if (t.includes('-')) {
+      const [a, b] = t.split('-').map(Number);
+      for (let i = a; i <= b; i++) result.push(i);
+    } else if (t && !isNaN(+t)) {
+      result.push(+t);
+    }
+  }
+  return result;
+}
+
+// ── VLAN parsing ───────────────────────────────────────────────
+// Handles both "vlan X / name Y" blocks AND "interface VlanX / description Y"
+
+function parseVlans(lines) {
+  const vlans = {};    // name → {vlan_id, subnet}
+  const byId  = {};    // vlan_id → name
+
+  // 1) vlan X / name blocks
+  let i = 0;
+  while (i < lines.length) {
+    const m = lines[i].trim().match(/^vlan\s+(\d+)$/);
+    if (m) {
+      const vid = +m[1];
+      let name = `vlan${vid}`;
+      if (i + 1 < lines.length) {
+        const nm = lines[i+1].trim().match(/^name\s+(\S+)/);
+        if (nm) { name = nm[1]; i++; }
+      }
+      vlans[name] = { vlan_id: vid, subnet: '' };
+      byId[vid] = name;
+    }
+    i++;
+  }
+
+  // 2) interface VlanX + description → derive VLAN name and IP
+  let current = null;
+  for (const line of lines) {
+    const s = line.trim();
+    const mIface = s.match(/^interface\s+[Vv]lan(\d+)$/);
+    if (mIface) { current = +mIface[1]; continue; }
+    if (current !== null) {
+      if (s === '!' || (s && !line.startsWith(' ') && !line.startsWith('\t'))) {
+        current = null; continue;
+      }
+      // derive name from description
+      const mDesc = s.match(/^description\s+(.+)/);
+      if (mDesc) {
+        const desc = mDesc[1].trim().replace(/\s+/g, '-');
+        if (!(current in byId) && current !== 1) {
+          // new VLAN discovered via SVI description
+          vlans[desc] = { vlan_id: current, subnet: '' };
+          byId[current] = desc;
+        } else if (current in byId) {
+          // already have it, just update description-derived name if it was auto-named
+          const existingName = byId[current];
+          if (existingName === `vlan${current}` && current !== 1) {
+            // rename the auto-name to the description
+            vlans[desc] = vlans[existingName];
+            delete vlans[existingName];
+            byId[current] = desc;
+          }
+        }
+      }
+      // derive subnet from ip address
+      const mIp = s.match(/^ip address\s+(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)/);
+      if (mIp && current in byId) {
+        const name = byId[current];
+        if (vlans[name]) vlans[name].subnet = cidrFromIpMask(mIp[1], mIp[2]);
+      }
+    }
+  }
+
+  // Also pick up any VLANs referenced in switchport commands but not defined
+  for (const line of lines) {
+    const s = line.trim();
+    let m;
+    if ((m = s.match(/^switchport access vlan\s+(\d+)/))) {
+      const vid = +m[1];
+      if (!(vid in byId) && vid !== 1) {
+        const name = `vlan${vid}`;
+        vlans[name] = { vlan_id: vid, subnet: '' };
+        byId[vid] = name;
+      }
+    }
+    if ((m = s.match(/^switchport trunk native vlan\s+(\d+)/))) {
+      const vid = +m[1];
+      if (!(vid in byId) && vid !== 1) {
+        const name = `vlan${vid}`;
+        vlans[name] = { vlan_id: vid, subnet: '' };
+        byId[vid] = name;
+      }
+    }
+    if ((m = s.match(/^switchport trunk allowed vlan(?:\s+add)?\s+(.+)/))) {
+      for (const vid of expandVlanRange(m[1])) {
+        if (!(vid in byId) && vid !== 1) {
+          const name = `vlan${vid}`;
+          vlans[name] = { vlan_id: vid, subnet: '' };
+          byId[vid] = name;
+        }
+      }
+    }
+    if ((m = s.match(/^switchport voice vlan\s+(\d+)/))) {
+      const vid = +m[1];
+      if (!(vid in byId) && vid !== 1) {
+        const name = `vlan${vid}`;
+        vlans[name] = { vlan_id: vid, subnet: '' };
+        byId[vid] = name;
+      }
+    }
+  }
+
+  // Remove VLAN 1 (Cisco default, not mapped to Mist)
+  delete vlans['vlan1'];
+  delete byId[1];
+
+  return { vlans, byId };
+}
+
+function cidrFromIpMask(ip, mask) {
+  const parts = mask.split('.').map(Number);
+  let bits = 0;
+  for (const p of parts) {
+    bits += p.toString(2).split('').filter(c => c === '1').length;
+  }
+  // Return network address / prefix
+  const ipParts = ip.split('.').map(Number);
+  const maskParts = parts;
+  const net = ipParts.map((b, i) => b & maskParts[i]).join('.');
+  return `${net}/${bits}`;
+}
+
+// ── Interface parsing ──────────────────────────────────────────
+
+function parseInterfaces(lines) {
+  const ifaces = {};
+  let current = null;
+  let props = {};
+
+  function commit() {
+    if (current) ifaces[current] = props;
+  }
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const s = line.trim();
+
+    const mIface = s.match(/^interface\s+(.+)$/);
+    if (mIface) {
+      commit();
+      current = mIface[1].trim();
+      props = { rawLines: [] };
+      continue;
+    }
+
+    if (!current) continue;
+
+    if (s === '!' || (s && !line.startsWith(' ') && !line.startsWith('\t') && !s.startsWith('!'))) {
+      // Check if this is a new top-level command (not indented)
+      if (!s.startsWith('!') && s !== '') {
+        commit();
+        current = null;
+        props = {};
+        // Don't skip — re-process this line for interface detection
+        const m2 = s.match(/^interface\s+(.+)$/);
+        if (m2) {
+          current = m2[1].trim();
+          props = { rawLines: [] };
+        }
+        continue;
+      }
+      if (s === '!') {
+        commit();
+        current = null;
+        props = {};
+        continue;
+      }
+    }
+
+    props.rawLines.push(s);
+
+    let m;
+    if ((m = s.match(/^description\s+(.*)/)))          props.description = m[1].trim();
+    if ((m = s.match(/^switchport mode\s+(\S+)/)))     props.mode = m[1];
+    if ((m = s.match(/^switchport access vlan\s+(\d+)/))) props.accessVlan = +m[1];
+    if ((m = s.match(/^switchport trunk native vlan\s+(\d+)/))) props.nativeVlan = +m[1];
+    if ((m = s.match(/^switchport trunk allowed vlan(?:\s+add)?\s+(.+)/))) {
+      const existing = props.trunkVlans || '';
+      props.trunkVlans = existing ? existing + ',' + m[1].trim() : m[1].trim();
+    }
+    if ((m = s.match(/^switchport voice vlan\s+(\d+)/))) props.voiceVlan = +m[1];
+    if (s === 'shutdown')                              props.disabled = true;
+    if ((m = s.match(/^speed\s+(\S+)/)))               props.speed = m[1];
+    if ((m = s.match(/^duplex\s+(\S+)/)))              props.duplex = m[1];
+    if (s.match(/^power inline never/))                props.poeDisabled = true;
+    if (s.match(/^spanning-tree portfast/))            props.stpEdge = true;
+    if (s.match(/^no spanning-tree portfast/))         props.stpEdge = false;
+    if (s.match(/^spanning-tree bpduguard enable/))    props.bpduguard = true;
+    if (s.match(/^spanning-tree guard root/))          props.rootguard = true;
+    if ((m = s.match(/^mtu\s+(\d+)/)))                 props.mtu = +m[1];
+    if (s.match(/^dot1x pae authenticator/) || s.match(/^authentication port-control auto/))
+      props.portAuth = 'dot1x';
+    if (s.match(/^mab/))                               props.enableMacAuth = true;
+    if ((m = s.match(/^storm-control broadcast level\s+(\S+)/))) {
+      props.stormControl = { percentage: Math.round(+m[1]), no_broadcast: false };
+    }
+    if ((m = s.match(/^channel-group\s+(\d+)\s+mode\s+(\S+)/))) {
+      props.aeIdx   = +m[1];
+      props.aggregated = true;
+      props.aeDisableLacp = (m[2] === 'on');
+      props.aeLacpSlow    = false;
+      props.aeLacpForceUp = false;
+    }
+  }
+  commit();
+  return ifaces;
+}
+
+// ── Cisco → Junos interface name ───────────────────────────────
+
+const CISCO_PREFIX = [
+  ['tengigabitethernet', 'xe'],
+  ['twentyfivegige',     'et'],
+  ['hundredgige',        'et'],
+  ['fortygige',          'et'],
+  ['gigabitethernet',    'ge'],
+  ['fastethernet',       'fe'],
+  ['port-channel',       'ae'],
+];
+
+function ciscoToJunos(iface) {
+  const lower = iface.toLowerCase();
+  for (const [prefix, junos] of CISCO_PREFIX) {
+    if (lower.startsWith(prefix)) {
+      const remainder = lower.slice(prefix.length).replace(/^\//, '');
+      const parts = remainder.split(/[/.]/).filter(Boolean).map(p => parseInt(p, 10));
+
+      // Cisco uses 1-based numbering for both stack/FPC and port.
+      // Juniper uses 0-based for both. Apply a -1 offset to each.
+      // The middle segment (module/PIC) is 0-based in both — no offset needed.
+      if (parts.length === 1) {
+        // e.g. Port-channel1 → ae1 (keep as-is; ae_idx follows Cisco channel-group number)
+        return `${junos}-0/0/${parts[0]}`;
+      }
+      if (parts.length === 2) {
+        // e.g. FastEthernet0/1 → fe-0/0/0  (module stays, port -1)
+        const mod  = parts[0];
+        const port = Math.max(0, parts[1] - 1);
+        return `${junos}-0/${mod}/${port}`;
+      }
+      if (parts.length >= 3) {
+        // e.g. GigabitEthernet1/0/1 → ge-0/0/0  (stack -1, module stays, port -1)
+        const fpc  = Math.max(0, parts[0] - 1);
+        const pic  = parts[1];
+        const port = Math.max(0, parts[2] - 1);
+        return `${junos}-${fpc}/${pic}/${port}`;
+      }
+    }
+  }
+  return lower.replace(/\s+/g, '-');
+}
+
+// ── Default port usage ─────────────────────────────────────────
+
+function defaultPortUsage(mode = 'access') {
+  return {
+    mode,
+    all_networks: false,
+    allow_dhcpd: false,
+    allow_multiple_supplicants: false,
+    bypass_auth_when_server_down: false,
+    description: '',
+    disable_autoneg: false,
+    disabled: false,
+    duplex: 'auto',
+    dynamic_vlan_networks: null,
+    enable_mac_auth: false,
+    enable_qos: false,
+    guest_network: null,
+    mac_auth_only: false,
+    mac_auth_protocol: 'pap',
+    mac_limit: 0,
+    mode,
+    mtu: null,
+    networks: null,
+    persist_mac: false,
+    poe_disabled: false,
+    port_auth: null,
+    port_network: 'default',
+    reauth_interval: null,
+    server_fail_network: null,
+    server_reject_network: null,
+    speed: 'auto',
+    storm_control: {},
+    stp_edge: false,
+    stp_no_root_port: false,
+    stp_p2p: false,
+    use_vstp: false,
+    voip_network: null
+  };
+}
+
+// ── Port usage builder ─────────────────────────────────────────
+
+function buildPortUsages(ifaces, byId, vlans) {
+  const portUsages = {};
+  const portConfigMap = {};  // junosIfaceName → port config entry
+  const portTableRows = [];  // for display
+  const fpToName = {};
+  const counter  = {};
+  const warnings = [];
+
+  function vname(vid) { return byId[vid] || `vlan${vid}`; }
+
+  // Fingerprint excludes LACP fields — member ports share a usage profile
+  // with any other port that has the same VLAN/mode/auth config.
+  function fingerprint(p) {
+    return JSON.stringify([
+      p.mode || 'access',
+      p.accessVlan,
+      p.nativeVlan,
+      p.trunkVlans || '',
+      p.voiceVlan,
+      !!p.poeDisabled,
+      !!p.stpEdge,
+      p.speed || 'auto',
+      p.duplex || 'auto',
+      p.portAuth || null,
+      !!p.enableMacAuth,
+      !!p.disabled
+    ]);
+  }
+
+  for (const [ifaceName, props] of Object.entries(ifaces)) {
+    // Skip non-switchport interfaces
+    if (/loopback|tunnel|vlan|bdi|fastethernet0$|mgmt/i.test(ifaceName)) continue;
+
+    // Skip Port-channel / ae interfaces — Mist configures the physical
+    // member ports directly; the ae interface itself is not listed in port_config.
+    if (/^port-channel/i.test(ifaceName)) continue;
+
+    const hasConfig = props.mode || props.accessVlan !== undefined ||
+                      props.trunkVlans || props.voiceVlan || props.portAuth ||
+                      props.disabled || props.aggregated;
+    if (!hasConfig) continue;
+
+    const mode = props.mode || 'access';
+    const fp   = fingerprint(props);
+    const junos = ciscoToJunos(ifaceName);
+
+    // ── AP ports → force a single shared "Mist-APs" trunk profile ──────────
+    // Any interface whose description starts with "AP" (case-insensitive)
+    // is consolidated into one profile regardless of individual VLAN settings.
+    if (props.description && /^ap/i.test(props.description.trim())) {
+      if (!portUsages['Mist-APs']) {
+        const apPu = defaultPortUsage('trunk');
+        apPu.description  = 'Mist AP trunk port';
+        apPu.all_networks = true;
+        apPu.networks     = null;
+        apPu.poe_disabled = false;   // APs require PoE
+        apPu.stp_edge     = false;
+        // Set native/untagged VLAN (port_network) from this port's native VLAN
+        if (props.nativeVlan) apPu.port_network = vname(props.nativeVlan);
+        portUsages['Mist-APs'] = apPu;
+      }
+      portConfigMap[junos] = {
+        usage:              'Mist-APs',
+        critical:           false,
+        description:        props.description || '',
+        no_local_overwrite: false,
+        dynamic_usage:      null
+      };
+      portTableRows.push({
+        ciscoName: ifaceName,
+        junosName: junos,
+        mode:      'trunk',
+        usageName: 'Mist-APs',
+        vlans:     buildVlanSummary(props, byId),
+        notes:     buildNotes(props)
+      });
+      continue;
+    }
+
+    let usageName;
+    if (fp in fpToName) {
+      usageName = fpToName[fp];
+    } else {
+      // Derive a human-friendly usage profile name.
+      // LACP member ports use their own VLAN config for naming — no lag-aeN names.
+      let base;
+      if (props.portAuth === 'dot1x')
+        base = props.enableMacAuth ? 'dot1x-mab' : 'dot1x';
+      else if (props.disabled && !props.accessVlan && mode === 'access')
+        base = 'disabled';
+      else if (mode === 'trunk') {
+        const nat = props.nativeVlan ? `-native${props.nativeVlan}` : '';
+        const desc = props.description
+          ? `-${props.description.replace(/\s+/g,'_').replace(/[^a-zA-Z0-9_-]/g,'').slice(0,20)}`
+          : '';
+        base = `trunk${nat}${desc}` || 'trunk';
+      } else if (props.voiceVlan)
+        base = `access-voice-${vname(props.accessVlan || 0)}`;
+      else if (props.accessVlan)
+        base = `access-${vname(props.accessVlan)}`;
+      else
+        base = `access-default`;
+
+      // Sanitise
+      base = base.replace(/[^a-zA-Z0-9_-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g,'').slice(0,32);
+
+      counter[base] = (counter[base] || 0) + 1;
+      usageName = counter[base] === 1 ? base : `${base}-${counter[base]}`;
+      fpToName[fp] = usageName;
+
+      // Build the port usage profile (no LACP fields here — those go in port_config)
+      const pu = defaultPortUsage(mode);
+      pu.description  = props.description || '';
+      pu.disabled     = !!props.disabled;
+      pu.speed        = props.speed  || 'auto';
+      pu.duplex       = props.duplex || 'auto';
+      pu.poe_disabled = !!props.poeDisabled;
+      pu.stp_edge     = !!props.stpEdge;
+      if (props.mtu) pu.mtu = props.mtu;
+      if (props.stormControl) pu.storm_control = props.stormControl;
+
+      if (mode === 'access') {
+        if (props.accessVlan) pu.port_network = vname(props.accessVlan);
+        if (props.voiceVlan)  pu.voip_network = vname(props.voiceVlan);
+      } else if (mode === 'trunk') {
+        if (props.nativeVlan) pu.port_network = vname(props.nativeVlan);
+        if (props.trunkVlans && props.trunkVlans.toLowerCase() !== 'all') {
+          const ids  = expandVlanRange(props.trunkVlans);
+          const nets = ids.map(v => vname(v)).filter(n => n in vlans);
+          pu.networks     = nets.length ? nets : null;
+          pu.all_networks = !nets.length;
+        } else {
+          pu.all_networks = true;
+          pu.networks     = null;
+        }
+      }
+
+      if (props.portAuth === 'dot1x') {
+        pu.port_auth         = 'dot1x';
+        pu.enable_mac_auth   = !!props.enableMacAuth;
+        pu.mac_auth_only     = false;
+        pu.mac_auth_protocol = 'pap';
+        pu.allow_dhcpd       = true;
+      }
+
+      portUsages[usageName] = pu;
+    }
+
+    // Build the port_config entry for this physical interface.
+    // LACP aggregation fields live here, NOT in the port usage profile.
+    const portEntry = {
+      usage:              usageName,
+      critical:           false,
+      description:        props.description || '',
+      no_local_overwrite: false,
+      dynamic_usage:      null
+    };
+
+    if (props.aggregated) {
+      portEntry.aggregated      = true;
+      portEntry.ae_idx          = props.aeIdx;
+      portEntry.ae_disable_lacp = props.aeDisableLacp || false;
+      portEntry.ae_lacp_slow    = false;
+      portEntry.ae_lacp_force_up = false;
+    }
+
+    portConfigMap[junos] = portEntry;
+
+    portTableRows.push({
+      ciscoName: ifaceName,
+      junosName: junos,
+      mode,
+      usageName,
+      vlans: buildVlanSummary(props, byId),
+      notes: buildNotes(props)
+    });
+  }
+
+  // Ensure an "uplink" profile exists
+  if (!('uplink' in portUsages)) {
+    const up = defaultPortUsage('trunk');
+    up.all_networks = true;
+    up.allow_dhcpd  = true;
+    up.poe_disabled = true;
+    up.description  = 'Uplink / distribution trunk';
+    portUsages['uplink'] = up;
+  }
+
+  return { portUsages, portConfigMap, portTableRows, warnings };
+}
+
+// ── Port range compression ─────────────────────────────────────
+// Merges consecutive same-config interfaces into Mist range notation.
+// e.g. ge-1/0/11, ge-1/0/12 ... ge-1/0/15 → "ge-1/0/11-15"
+// Non-consecutive same-config ports → "ge-1/0/1,ge-1/0/3"
+
+function compressPortRanges(portConfigMap) {
+  // Group interfaces by their functional config, intentionally EXCLUDING the
+  // per-port description field.  Two ports that differ only in description
+  // (e.g. "Kitchen" vs "Classrom") share the same Mist behaviour and should
+  // be merged into a port range.  We track descriptions separately so we can
+  // preserve a common description when every port in a range shares one.
+  const groups = {};
+  for (const [iface, cfg] of Object.entries(portConfigMap)) {
+    const { description, ...rest } = cfg;
+    const key = JSON.stringify(rest);
+    if (!groups[key]) groups[key] = { rest, ifaces: [], descs: [] };
+    groups[key].ifaces.push(iface);
+    groups[key].descs.push(description || '');
+  }
+
+  const result = {};
+
+  for (const { rest, ifaces, descs } of Object.values(groups)) {
+    // If every port in this group carries the same description keep it;
+    // otherwise the descriptions are mixed across the range — clear it.
+    const uniqueDescs = [...new Set(descs.filter(Boolean))];
+    const finalCfg = { ...rest, description: uniqueDescs.length === 1 ? uniqueDescs[0] : '' };
+
+    // Parse "prefix-fpc/pic/port" e.g. ge-1/0/11 → base="ge-1/0/", port=11
+    const parsed = ifaces.map(iface => {
+      const m = iface.match(/^(.+\/)(\d+)$/);
+      return m ? { iface, base: m[1], port: parseInt(m[2]) } : { iface, base: null, port: null };
+    });
+
+    // Separate parseable from non-standard names
+    const byBase = {};
+    for (const p of parsed) {
+      if (p.base) {
+        (byBase[p.base] = byBase[p.base] || []).push(p.port);
+      } else {
+        result[p.iface] = finalCfg;
+      }
+    }
+
+    // For each base prefix, sort ports and build consecutive runs
+    for (const [base, ports] of Object.entries(byBase)) {
+      ports.sort((a, b) => a - b);
+      const runs = [];
+      let s = ports[0], e = ports[0];
+      for (let i = 1; i < ports.length; i++) {
+        if (ports[i] === e + 1) { e = ports[i]; }
+        else { runs.push([s, e]); s = e = ports[i]; }
+      }
+      runs.push([s, e]);
+
+      const rangeStr = runs.map(([s, e]) => s === e ? `${base}${s}` : `${base}${s}-${e}`).join(',');
+      result[rangeStr] = finalCfg;
+    }
+  }
+
+  return result;
+}
+
+function buildVlanSummary(props, byId) {
+  const parts = [];
+  function vn(vid) { return byId[vid] ? `${byId[vid]} (${vid})` : `vlan${vid}`; }
+  if (props.accessVlan) parts.push(vn(props.accessVlan));
+  if (props.voiceVlan)  parts.push(`Voice: ${vn(props.voiceVlan)}`);
+  if (props.nativeVlan) parts.push(`Native: ${vn(props.nativeVlan)}`);
+  if (props.trunkVlans) parts.push(`Trunk: ${props.trunkVlans}`);
+  return parts.join(' · ') || '—';
+}
+
+function buildNotes(props) {
+  const n = [];
+  if (props.aggregated)   n.push(`LACP ch-group ${props.aeIdx}`);
+  if (props.stpEdge)      n.push('PortFast');
+  if (props.bpduguard)    n.push('BPDUguard');
+  if (props.rootguard)    n.push('RootGuard');
+  if (props.portAuth)     n.push('dot1x');
+  if (props.enableMacAuth) n.push('MAB');
+  if (props.poeDisabled)  n.push('PoE off');
+  return n.join(', ') || '';
+}
+
+// ── AAA / RADIUS / TACACS ──────────────────────────────────────
+
+function parseRadius(lines) {
+  const authServers = [];
+  for (const line of lines) {
+    const s = line.trim();
+    let m;
+    if ((m = s.match(/^radius-server host\s+(\S+)(?:\s+auth-port\s+(\d+))?(?:\s+acct-port\s+(\d+))?(?:\s+key\s+(\S+))?/))) {
+      authServers.push({ host: m[1], port: m[2] ? +m[2] : 1812, secret: m[4] || '********' });
+    }
+    if ((m = s.match(/^\s*address ipv4\s+(\S+)(?:\s+auth-port\s+(\d+))?/))) {
+      authServers.push({ host: m[1], port: m[2] ? +m[2] : 1812, secret: '********' });
+    }
+  }
+  if (!authServers.length) return { enabled: false };
+  return {
+    enabled: true,
+    auth_servers: authServers,
+    acct_servers: authServers.map(s => ({ ...s, port: s.port + 1 })),
+    auth_server_selection: 'ordered',
+    auth_servers_retries: 3,
+    auth_servers_timeout: 5,
+    acct_interim_interval: 0,
+    coa_enabled: false,
+    coa_port: 3799,
+    fast_dot1x_timers: false,
+    network: 'default'
+  };
+}
+
+function parseTacacs(lines) {
+  const servers = [];
+  for (const line of lines) {
+    const s = line.trim();
+    const m = s.match(/^tacacs-server host\s+(\S+)(?:\s+key\s+(\S+))?/);
+    if (m) servers.push({ host: m[1], secret: m[2] || '********', port: 49, timeout: 10 });
+  }
+  if (!servers.length) return { enabled: false };
+  return { enabled: true, servers, tacplus_servers: servers, default_role: 'admin' };
+}
+
+// ── SNMP ───────────────────────────────────────────────────────
+
+function parseSnmp(lines) {
+  const v2c = [], trapHosts = [];
+  let contact = '', location = '';
+  for (const line of lines) {
+    const s = line.trim();
+    let m;
+    if ((m = s.match(/^snmp-server community\s+(\S+)\s+(RO|RW)/i)))
+      v2c.push({ community: m[1], view: 'all' });
+    if ((m = s.match(/^snmp-server contact\s+(.*)/)))  contact  = m[1].trim();
+    if ((m = s.match(/^snmp-server location\s+(.*)/))) location = m[1].trim().replace(/^"|"$/g,'');
+    if ((m = s.match(/^snmp-server host\s+(\S+)\s+(?:version\s+\S+\s+)?(\S+)/)))
+      trapHosts.push({ ip: m[1], community: m[2] });
+  }
+  if (!v2c.length) return { enabled: false };
+  const cfg = { enabled: true, contact, location, v2c_config: v2c };
+  if (trapHosts.length)
+    cfg.trap_groups = [{ name: 'default', targets: trapHosts.map(t => t.ip), version: 'v2' }];
+  return cfg;
+}
+
+// ── NTP / DNS / Syslog / DHCP snooping ────────────────────────
+
+function parseNtp(lines) {
+  return lines.filter(l => /^ntp server\s+/.test(l.trim()))
+              .map(l => l.trim().replace(/^ntp server\s+/, '').split(/\s/)[0]);
+}
+
+function parseDns(lines) {
+  const servers = [];
+  for (const l of lines) {
+    const m = l.trim().match(/^ip name-server\s+(.+)/);
+    if (m) servers.push(...m[1].trim().split(/\s+/));
+  }
+  return [...new Set(servers)];
+}
+
+function parseSyslog(lines) {
+  const hosts = lines
+    .map(l => l.trim().match(/^logging\s+(\d+\.\d+\.\d+\.\d+)/))
+    .filter(Boolean).map(m => m[1]);
+  if (!hosts.length) return { enabled: false };
+  return { enabled: true, servers: hosts.map(h => ({ host: h })) };
+}
+
+function parseDhcpSnooping(lines) {
+  const enabled = lines.some(l => /^ip dhcp snooping$/.test(l.trim()));
+  if (!enabled) return { enabled: false };
+  return {
+    enabled: true,
+    all_networks: true,
+    enable_arp_spoof_check: lines.some(l => /dynamic arp/i.test(l)),
+    enable_ip_source_guard: lines.some(l => /ip source binding|ip verify source/i.test(l))
+  };
+}
+
+// ── MAIN CONVERT ───────────────────────────────────────────────
+
+function convert(configText, templateName) {
+  const lines = configText.split('\n');
+  const infos = []; // informational conversion notes (not errors)
+
+  const { vlans, byId } = parseVlans(lines);
+  const ifaces = parseInterfaces(lines);
+  const { portUsages, portConfigMap, portTableRows, warnings } = buildPortUsages(ifaces, byId, vlans);
+
+  // Detect dot1x globally
+  const hasDot1x = lines.some(l => /dot1x system-auth-control/.test(l.trim()));
+  if (hasDot1x && !('dot1x' in portUsages)) {
+    const pu = defaultPortUsage('access');
+    pu.port_auth = 'dot1x';
+    pu.enable_mac_auth = true;
+    pu.mac_auth_only   = false;
+    pu.mac_auth_protocol = 'pap';
+    pu.allow_dhcpd = true;
+    pu.stp_edge    = true;
+    portUsages['dot1x'] = pu;
+  }
+
+  // Compress consecutive same-config interfaces into Mist range notation
+  const compressedPortConfig = compressPortRanges(portConfigMap);
+
+  const radiusConfig = parseRadius(lines);
+  const tacacsConfig = parseTacacs(lines);
+  const snmpConfig   = parseSnmp(lines);
+  const ntpServers   = parseNtp(lines);
+  const dnsServers   = parseDns(lines);
+  const syslog       = parseSyslog(lines);
+  const dhcpSnooping = parseDhcpSnooping(lines);
+
+  // Hostname
+  const hostnameMatch = lines.map(l => l.trim().match(/^hostname\s+(\S+)/)).find(Boolean);
+  const hostname = hostnameMatch ? hostnameMatch[1] : '';
+  const addlCmds = hostname ? [`# Original hostname: ${hostname}`] : [];
+
+  // Domain
+  const domainMatch = lines.map(l => l.trim().match(/^ip domain-name\s+(\S+)/)).find(Boolean);
+  const domain = domainMatch ? domainMatch[1] : '';
+  const dnsSuffix = domain ? [domain] : [];
+
+  // LLDP
+  const lldpEnabled = lines.some(l => /^lldp run/.test(l.trim()));
+
+  // STP mode — auto-convert all PVST variants to RSTP
+  const stpMode = lines.map(l => l.trim().match(/^spanning-tree mode\s+(\S+)/)).find(Boolean);
+  const stpModeStr = stpMode ? stpMode[1].toLowerCase() : null;
+  // Cisco PVST / Rapid-PVST / PVST+ all map to RSTP in Mist (Junos default)
+  const PVST_MODES = ['pvst', 'rapid-pvst', 'pvst+', 'rapid-pvst+'];
+  let mistStpMode = 'rstp'; // safe default
+  if (stpModeStr === 'mstp') mistStpMode = 'mstp';
+  const stpConverted = stpModeStr && PVST_MODES.includes(stpModeStr);
+  if (stpConverted) {
+    infos.push(`STP auto-converted: Cisco "${stpModeStr.toUpperCase()}" → Mist "rstp" (RSTP is the Junos/Mist default and is functionally equivalent to Rapid-PVST on a single-VLAN topology)`);
+  }
+
+  // Gateway
+  const gwMatch = lines.map(l => l.trim().match(/^ip default-gateway\s+(\S+)/)).find(Boolean);
+
+  // Build switch_matching rule
+  const switchMatchingRule = {
+    name: templateName,
+    match_role: templateName.toLowerCase().replace(/\s+/g, '-'),
+    ip_config: { network: 'default', type: 'dhcp' },
+    oob_ip_config: { type: 'dhcp', use_mgmt_vrf: false },
+    port_config: compressedPortConfig,
+    additional_config_cmds: addlCmds,
+    port_mirroring: {}
+  };
+
+  // Mist NAC (if dot1x present)
+  const mistNac = hasDot1x ? {
+    enabled: false,
+    network: 'default',
+    auth_servers_retries: 3,
+    auth_servers_timeout: 5,
+    coa_enabled: false,
+    coa_port: 3799,
+    acct_interim_interval: 0,
+    fast_dot1x_timers: false
+  } : undefined;
+
+  const template = {
+    name: templateName,
+    networks: vlans,
+    port_usages: portUsages,
+    radius_config: radiusConfig,
+    snmp_config: snmpConfig,
+    remote_syslog: syslog,
+    dhcp_snooping: dhcpSnooping,
+    ntp_servers: ntpServers,
+    dns_servers: dnsServers,
+    dns_suffix: dnsSuffix,
+    switch_matching: {
+      enable: Object.keys(portConfigMap).length > 0,
+      rules: [switchMatchingRule]
+    },
+    switch_mgmt: {
+      config_revert_timer: 5,
+      dhcp_option_fqdn: false,
+      local_accounts: {},
+      protect_re: { enabled: false },
+      root_password: '',
+      tacacs: tacacsConfig
+    },
+    stp_config: {
+      mode: mistStpMode
+    },
+    vrf_config: { enabled: false },
+    extra_routes: {},
+    extra_routes6: {},
+    routing_policies: {},
+    port_mirroring: {},
+    bgp_config: null,
+    additional_config_cmds: addlCmds,
+    acl_policies: [],
+    disabled_system_defined_port_usages: []
+  };
+
+  if (mistNac) template.mist_nac = mistNac;
+
+  // Stats
+  const stats = {
+    vlans: Object.keys(vlans).length,
+    portUsages: Object.keys(portUsages).length,
+    portsMapped: Object.keys(portConfigMap).length,
+    portRanges: Object.keys(compressedPortConfig).length,
+    radiusEnabled: radiusConfig.enabled,
+    tacacsEnabled: tacacsConfig.enabled,
+    snmpEnabled: snmpConfig.enabled,
+    lldpEnabled,
+    hostname,
+    domain,
+    stpModeOriginal: stpModeStr || 'default',
+    stpModeMist: mistStpMode,
+    stpConverted
+  };
+
+  return { template, stats, portTableRows, warnings, infos };
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  UI LOGIC
+// ═══════════════════════════════════════════════════════════════
+
+let currentTemplate = null;
+let currentTemplateName = 'mist-switch-template';
+
+// ── Drag & Drop ────────────────────────────────────────────────
+
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+
+dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('dragover'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+dropzone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropzone.classList.remove('dragover');
+  const file = e.dataTransfer.files[0];
+  if (file) loadFile(file);
+});
+
+fileInput.addEventListener('change', () => {
+  if (fileInput.files[0]) loadFile(fileInput.files[0]);
+});
+
+// Allow clicking the dropzone (not the label)
+dropzone.addEventListener('click', e => {
+  if (e.target === dropzone || e.target.tagName === 'P' || e.target.tagName === 'H3' || e.target.tagName === 'DIV') {
+    fileInput.click();
+  }
+});
+
+function loadFile(file) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    showTextarea(e.target.result, file.name);
+  };
+  reader.readAsText(file);
+}
+
+function showTextarea(content, filename) {
+  document.getElementById('dropzone').style.display = 'none';
+  const tw = document.getElementById('textareaWrapper');
+  tw.classList.add('visible');
+  document.getElementById('configInput').value = content;
+
+  if (filename) {
+    document.getElementById('fileInfo').style.display = 'flex';
+    document.getElementById('fileName').textContent = filename;
+    const name = filename.replace(/\.[^.]+$/, '');
+    document.getElementById('templateName').value = name;
+  }
+
+  document.getElementById('inputDot').className = 'dot green';
+  document.getElementById('inputSubtitle').textContent = filename || 'Config loaded';
+}
+
+function clearInput() {
+  document.getElementById('dropzone').style.display = 'flex';
+  document.getElementById('textareaWrapper').classList.remove('visible');
+  document.getElementById('configInput').value = '';
+  document.getElementById('fileInfo').style.display = 'none';
+  document.getElementById('inputDot').className = 'dot';
+  document.getElementById('inputSubtitle').textContent = 'Paste or upload a switch config';
+  fileInput.value = '';
+}
+
+// Auto-show textarea on paste
+document.getElementById('configInput').addEventListener('input', () => {
+  if (document.getElementById('configInput').value) {
+    document.getElementById('inputDot').className = 'dot green';
+  }
+});
+
+document.addEventListener('paste', e => {
+  const active = document.activeElement;
+  if (active && active.id === 'configInput') return;
+  const text = e.clipboardData.getData('text');
+  if (text && text.includes('interface')) {
+    showTextarea(text, null);
+  }
+});
+
+// ── Convert ────────────────────────────────────────────────────
+
+function runConvert() {
+  let config = document.getElementById('configInput').value.trim();
+  if (!config) {
+    // Show textarea if not shown
+    document.getElementById('dropzone').style.display = 'none';
+    document.getElementById('textareaWrapper').classList.add('visible');
+    showToast('Paste or upload a Cisco config first', '⚠', false);
+    return;
+  }
+
+  const templateName = document.getElementById('templateName').value.trim() || 'Converted-from-Cisco';
+  currentTemplateName = templateName;
+
+  const { template, stats, portTableRows, warnings, infos } = convert(config, templateName);
+  currentTemplate = template;
+
+  renderOutput(template, stats, portTableRows, warnings, infos);
+  document.getElementById('outputDot').className = 'dot blue';
+  switchTab('json', document.querySelector('.tab'));
+}
+
+// ── Render output ──────────────────────────────────────────────
+
+function renderOutput(template, stats, portTableRows, warnings, infos = []) {
+  // Show json output section, enable action buttons
+  document.getElementById('outputPlaceholder').style.display = 'none';
+  document.getElementById('jsonOutput').classList.add('visible');
+  document.getElementById('copyBtn').disabled = false;
+  document.getElementById('downloadBtn').disabled = false;
+  document.getElementById('pushToggleBtn').disabled = false;
+  document.getElementById('curlBtn').disabled = false;
+
+  // Stats bar
+  const statsBar = document.getElementById('statsBar');
+  statsBar.innerHTML = `
+    <div class="stat"><span class="stat-label">VLANs</span> <span class="stat-value green">${stats.vlans}</span></div>
+    <div class="stat"><span class="stat-label">Port Profiles</span> <span class="stat-value green">${stats.portUsages}</span></div>
+    <div class="stat"><span class="stat-label">Ports Mapped</span> <span class="stat-value green">${stats.portsMapped}</span></div>
+    <div class="stat"><span class="stat-label">Port Ranges</span> <span class="stat-value green">${stats.portRanges}</span></div>
+    <div class="stat"><span class="stat-label">RADIUS</span> <span class="stat-value ${stats.radiusEnabled ? 'green' : ''}">${stats.radiusEnabled ? '✓ On' : 'Off'}</span></div>
+    <div class="stat"><span class="stat-label">TACACS</span> <span class="stat-value ${stats.tacacsEnabled ? 'green' : ''}">${stats.tacacsEnabled ? '✓ On' : 'Off'}</span></div>
+    <div class="stat"><span class="stat-label">SNMP</span> <span class="stat-value ${stats.snmpEnabled ? 'green' : ''}">${stats.snmpEnabled ? '✓ On' : 'Off'}</span></div>
+    <div class="stat"><span class="stat-label">STP</span> <span class="stat-value ${stats.stpConverted ? 'green' : ''}">${stats.stpConverted ? stats.stpModeOriginal.toUpperCase() + ' → rstp ✓' : stats.stpModeMist}</span></div>
+    <div class="stat"><span class="stat-label">LLDP</span> <span class="stat-value ${stats.lldpEnabled ? 'green' : ''}">${stats.lldpEnabled ? '✓ On' : 'Off'}</span></div>
+  `;
+
+  // Infos + Warnings
+  const wc = document.getElementById('warningsContainer');
+  wc.innerHTML =
+    infos.map(m => `<div class="info">✓ ${m}</div>`).join('') +
+    warnings.map(w => `<div class="warning">⚠ ${w}</div>`).join('');
+
+  // JSON with syntax highlighting
+  const json = JSON.stringify(template, null, 2);
+  document.getElementById('jsonPre').innerHTML = syntaxHighlight(json);
+
+  // Port table
+  const tbody = document.getElementById('portTableBody');
+  tbody.innerHTML = portTableRows.map(r => `
+    <tr>
+      <td class="iface-name">${r.ciscoName}</td>
+      <td class="iface-name">${r.junosName}</td>
+      <td>${modeTag(r.mode, r)}</td>
+      <td class="usage-name">${r.usageName}</td>
+      <td style="font-size:10.5px;color:var(--text-dim)">${r.vlans}</td>
+      <td style="font-size:10.5px;color:var(--text-dimmer)">${r.notes}</td>
+    </tr>
+  `).join('');
+
+  // Summary
+  renderSummary(template, stats);
+}
+
+function modeTag(mode, row) {
+  if (row.notes.includes('LACP')) return `<span class="tag tag-lacp">LAG/LACP</span>`;
+  if (row.notes.includes('dot1x')) return `<span class="tag tag-dot1x">dot1x</span>`;
+  if (mode === 'trunk') return `<span class="tag tag-trunk">trunk</span>`;
+  if (mode === 'access') return `<span class="tag tag-access">access</span>`;
+  return `<span class="tag tag-default">${mode}</span>`;
+}
+
+function renderSummary(template, stats) {
+  const vlansHtml = Object.entries(template.networks)
+    .sort((a,b) => a[1].vlan_id - b[1].vlan_id)
+    .map(([n, v]) => `<li><strong>${n}</strong> — VLAN ${v.vlan_id}${v.subnet ? ' · ' + v.subnet : ''}</li>`)
+    .join('');
+
+  const puHtml = Object.entries(template.port_usages)
+    .map(([n, pu]) => `<li><strong>${n}</strong> — ${pu.mode}${pu.port_network !== 'default' ? ' · VLAN: ' + pu.port_network : ''}${pu.voip_network ? ' · Voice: ' + pu.voip_network : ''}${pu.port_auth ? ' · 🔐 dot1x' : ''}${pu.poe_disabled ? ' · PoE off' : ''}</li>`)
+    .join('');
+
+  const radHtml = template.radius_config.enabled
+    ? template.radius_config.auth_servers.map(s => `<li>${s.host}:${s.port}</li>`).join('')
+    : '<li>Not configured</li>';
+
+  document.getElementById('summaryContent').innerHTML = `
+    <div style="padding:16px;display:flex;flex-direction:column;gap:20px">
+      <section>
+        <h3 style="font-size:12px;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-dim);margin-bottom:8px">Networks / VLANs (${stats.vlans})</h3>
+        <ul style="list-style:none;display:flex;flex-direction:column;gap:4px;font-size:12px">${vlansHtml || '<li style="color:var(--text-dimmer)">None detected</li>'}</ul>
+      </section>
+      <section>
+        <h3 style="font-size:12px;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-dim);margin-bottom:8px">Port Usage Profiles (${stats.portUsages})</h3>
+        <ul style="list-style:none;display:flex;flex-direction:column;gap:4px;font-size:12px">${puHtml}</ul>
+      </section>
+      <section>
+        <h3 style="font-size:12px;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-dim);margin-bottom:8px">RADIUS Servers</h3>
+        <ul style="list-style:none;display:flex;flex-direction:column;gap:4px;font-size:12px">${radHtml}</ul>
+      </section>
+      <section>
+        <h3 style="font-size:12px;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-dim);margin-bottom:8px">Infrastructure</h3>
+        <ul style="list-style:none;display:flex;flex-direction:column;gap:4px;font-size:12px">
+          <li><strong>NTP:</strong> ${template.ntp_servers.join(', ') || '—'}</li>
+          <li><strong>DNS:</strong> ${template.dns_servers.join(', ') || '—'}</li>
+          <li><strong>DNS Suffix:</strong> ${template.dns_suffix.join(', ') || '—'}</li>
+          <li><strong>DHCP Snooping:</strong> ${template.dhcp_snooping.enabled ? '✓ Enabled' : 'Disabled'}</li>
+          <li><strong>STP:</strong> ${stats.stpConverted ? `✓ Auto-converted from Cisco ${stats.stpModeOriginal.toUpperCase()} → <strong style="color:var(--green)">rstp</strong>` : stats.stpModeMist}</li>
+          <li><strong>LLDP:</strong> ${stats.lldpEnabled ? '✓ Enabled' : 'Disabled'}</li>
+          <li><strong>SNMP:</strong> ${stats.snmpEnabled ? '✓ Enabled' : 'Disabled'}</li>
+          <li><strong>Syslog:</strong> ${template.remote_syslog.enabled ? '✓ Enabled' : 'Disabled'}</li>
+          <li><strong>TACACS:</strong> ${template.switch_mgmt.tacacs.enabled ? '✓ Enabled' : 'Disabled'}</li>
+        </ul>
+      </section>
+      <section>
+        <h3 style="font-size:12px;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-dim);margin-bottom:8px">API Reference</h3>
+        <div style="font-size:12px;color:var(--text-dim);line-height:2">
+          <div>Create: <code style="font-size:11px;background:#0a0d14;padding:2px 6px;border-radius:4px">POST /api/v1/orgs/{org_id}/networktemplates</code></div>
+          <div>Update: <code style="font-size:11px;background:#0a0d14;padding:2px 6px;border-radius:4px">PUT /api/v1/orgs/{org_id}/networktemplates/{template_id}</code></div>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+// ── JSON syntax highlighter ────────────────────────────────────
+
+function syntaxHighlight(json) {
+  return json
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, match => {
+      let cls = 'j-num';
+      if (/^"/.test(match)) {
+        if (/:$/.test(match)) cls = 'j-key';
+        else cls = 'j-str';
+      } else if (/true|false/.test(match)) cls = 'j-bool';
+      else if (/null/.test(match)) cls = 'j-null';
+      return `<span class="${cls}">${match}</span>`;
+    });
+}
+
+// ── Tab switching ──────────────────────────────────────────────
+
+function switchTab(name, el) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => {
+    if (t.textContent.toLowerCase().includes(name)) t.classList.add('active');
+  });
+  document.getElementById(`tab-${name}`).classList.add('active');
+}
+
+// ── Copy / Download ────────────────────────────────────────────
+
+function copyJSON() {
+  if (!currentTemplate) return;
+  navigator.clipboard.writeText(JSON.stringify(currentTemplate, null, 2))
+    .then(() => showToast('JSON copied to clipboard!', '✓', true))
+    .catch(() => {
+      // Fallback
+      const ta = document.createElement('textarea');
+      ta.value = JSON.stringify(currentTemplate, null, 2);
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      showToast('JSON copied to clipboard!', '✓', true);
+    });
+}
+
+function downloadJSON() {
+  if (!currentTemplate) return;
+  const blob = new Blob([JSON.stringify(currentTemplate, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${currentTemplateName.replace(/\s+/g,'-')}.mist.json`;
+  a.click();
+  showToast('Downloaded!', '⬇', true);
+}
+
+// ── Mist API fetch (proxy-aware) ───────────────────────────────
+// On Netlify the browser calls /.netlify/functions/mist-proxy (same-origin,
+// no CORS).  When opened as a local file the proxy isn't available so we
+// fall through to a direct fetch, which will surface the existing CORS
+// warning and cURL fallback.
+async function mistFetch(targetUrl, method = 'GET', token = '', payload = null) {
+  if (window.location.protocol === 'file:') {
+    // Direct call — will likely fail with CORS, showing the warning banner
+    const opts = {
+      method,
+      headers: { 'Authorization': `Token ${token}`, 'Content-Type': 'application/json' },
+    };
+    if (payload != null) opts.body = JSON.stringify(payload);
+    return fetch(targetUrl, opts);
+  }
+  // Proxy call — same-origin, CORS-free
+  return fetch('/.netlify/functions/mist-proxy', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ targetUrl, method, token, payload }),
+  });
+}
+
+// ── Push to Mist ───────────────────────────────────────────────
+
+function togglePushDrawer() {
+  const drawer = document.getElementById('pushDrawer');
+  drawer.classList.toggle('open');
+  document.getElementById('pushToggleBtn').textContent =
+    drawer.classList.contains('open') ? '✕ Close' : '🚀 Push to Mist API';
+}
+
+async function testConnection() {
+  const orgId    = document.getElementById('orgId').value.trim();
+  const apiToken = document.getElementById('apiToken').value.trim();
+  const baseUrl  = document.getElementById('baseUrl').value.trim() || 'https://api.mist.com';
+
+  if (!apiToken) { showToast('Enter an API token first', '⚠', false); return; }
+
+  const status = document.getElementById('pushStatus');
+  status.className = 'push-status';
+  status.style.display = 'block';
+  status.textContent = '⏳ Testing connection…';
+
+  try {
+    // Step 1 — validate token via /api/v1/self
+    const selfResp = await mistFetch(`${baseUrl}/api/v1/self`, 'GET', apiToken);
+
+    if (!selfResp.ok) {
+      status.className = 'push-status error';
+      status.textContent = `✕ Token rejected (${selfResp.status}) — check your API token`;
+      return;
+    }
+
+    const self = await selfResp.json();
+    const userName = self.name || self.email || 'Unknown user';
+
+    // Step 2 — if org ID provided, confirm access to that org
+    if (orgId) {
+      const orgResp = await mistFetch(`${baseUrl}/api/v1/orgs/${orgId}`, 'GET', apiToken);
+
+      if (orgResp.status === 404 || orgResp.status === 403) {
+        status.className = 'push-status error';
+        status.textContent = `✕ Token is valid (${userName}) but cannot access org ${orgId} — check the Org ID`;
+        return;
+      }
+
+      if (!orgResp.ok) {
+        status.className = 'push-status error';
+        status.textContent = `✕ Org check failed (${orgResp.status}) — token OK but org unreachable`;
+        return;
+      }
+
+      const org = await orgResp.json();
+      const orgName = org.name || orgId;
+      status.className = 'push-status success';
+      status.textContent = `✓ Connected as "${userName}" · Org: "${orgName}" · Ready to push`;
+      showToast(`Connection verified — ${orgName}`, '✓', true);
+    } else {
+      // No org ID — just confirm token works and list accessible orgs
+      const privs = self.privileges || [];
+      const orgNames = privs.map(p => p.name).filter(Boolean).slice(0, 3).join(', ');
+      status.className = 'push-status success';
+      status.textContent = `✓ Token valid — logged in as "${userName}"${orgNames ? ' · Orgs: ' + orgNames : ''} · Enter an Org ID to continue`;
+      showToast(`Token verified — ${userName}`, '✓', true);
+    }
+  } catch (err) {
+    status.className = 'push-status error';
+    const isFileProtocol = window.location.protocol === 'file:';
+    if (isFileProtocol || err.message.toLowerCase().includes('failed to fetch') || err.message.toLowerCase().includes('networkerror')) {
+      status.textContent = `✕ CORS blocked — browser rejected the request from a local file. See the yellow notice above, or use "Copy as cURL" to test from your terminal.`;
+    } else {
+      status.textContent = `✕ Network error: ${err.message}`;
+    }
+  }
+}
+
+async function pushToMist() {
+  if (!currentTemplate) { showToast('Convert a config first', '⚠', false); return; }
+
+  const orgId     = document.getElementById('orgId').value.trim();
+  const apiToken  = document.getElementById('apiToken').value.trim();
+  const baseUrl   = document.getElementById('baseUrl').value.trim() || 'https://api.mist.com';
+  const templateId = document.getElementById('templateId').value.trim();
+
+  if (!orgId || !apiToken) {
+    showToast('Org ID and API Token are required', '⚠', false);
+    return;
+  }
+
+  const status = document.getElementById('pushStatus');
+  status.className = 'push-status';
+  status.style.display = 'block';
+  status.textContent = '⏳ Pushing…';
+
+  const method = templateId ? 'PUT' : 'POST';
+  const url = templateId
+    ? `${baseUrl}/api/v1/orgs/${orgId}/networktemplates/${templateId}`
+    : `${baseUrl}/api/v1/orgs/${orgId}/networktemplates`;
+
+  try {
+    const resp = await mistFetch(url, method, apiToken, currentTemplate);
+    const data = await resp.json();
+    if (!resp.ok) {
+      status.className = 'push-status error';
+      status.textContent = `✕ ${resp.status}: ${JSON.stringify(data).slice(0, 200)}`;
+    } else {
+      status.className = 'push-status success';
+      const tid = data.id || '?';
+      status.textContent = `✓ Created! Template ID: ${tid}`;
+      showToast(`Template created in Mist (${tid})`, '✓', true);
+    }
+  } catch (err) {
+    status.className = 'push-status error';
+    status.textContent = `✕ Network error: ${err.message}`;
+  }
+}
+
+// ── Toast ──────────────────────────────────────────────────────
+
+function showToast(msg, icon, success) {
+  const toast = document.getElementById('toast');
+  document.getElementById('toastMsg').textContent = msg;
+  document.getElementById('toastIcon').textContent = icon;
+  toast.className = `toast ${success ? 'success' : ''} show`;
+  setTimeout(() => toast.classList.remove('show'), 2800);
+}
+
+// ── Auto-expand dropzone → textarea on paste ───────────────────
+
+window.addEventListener('paste', e => {
+  const ta = document.getElementById('configInput');
+  if (document.activeElement !== ta) {
+    const text = e.clipboardData.getData('text');
+    if (text && (text.includes('interface') || text.includes('vlan'))) {
+      showTextarea(text, null);
+      document.getElementById('inputSubtitle').textContent = 'Config pasted';
+    }
+  }
+});
+
+// ── CORS auto-detection on load ────────────────────────────────
+// Show warning banner whenever the page is served from file://
+window.addEventListener('DOMContentLoaded', () => {
+  if (window.location.protocol === 'file:') {
+    document.getElementById('corsWarning').style.display = 'block';
+  }
+});
+
+// ── Copy as cURL ───────────────────────────────────────────────
+// Generates a ready-to-run curl command for the Mist API push.
+// Works from any terminal regardless of browser CORS restrictions.
+function copyCurl() {
+  if (!currentTemplate) { showToast('Convert a config first', '⚠', false); return; }
+
+  const orgId      = document.getElementById('orgId').value.trim();
+  const apiToken   = document.getElementById('apiToken').value.trim();
+  const baseUrl    = (document.getElementById('baseUrl').value.trim() || 'https://api.mist.com').replace(/\/$/, '');
+  const templateId = document.getElementById('templateId').value.trim();
+
+  const method = templateId ? 'PUT' : 'POST';
+  const url    = templateId
+    ? `${baseUrl}/api/v1/orgs/${orgId || '{ORG_ID}'}/networktemplates/${templateId}`
+    : `${baseUrl}/api/v1/orgs/${orgId || '{ORG_ID}'}/networktemplates`;
+
+  const tokenPlaceholder = apiToken || '{YOUR_API_TOKEN}';
+  const payload = JSON.stringify(currentTemplate, null, 2);
+
+  // Use a two-step approach: save JSON to a temp file then curl with @file.
+  // This avoids shell escaping issues with large payloads and special characters.
+  const curl =
+`# Step 1 — verify your token first
+curl -s "${baseUrl}/api/v1/self" \\
+  -H "Authorization: Token ${tokenPlaceholder}" | python3 -m json.tool
+
+# Step 2 — save the Mist template JSON to a file
+cat > mist-template.json << 'ENDJSON'
+${payload}
+ENDJSON
+
+# Step 3 — push the template to your Mist org
+curl -s -X ${method} "${url}" \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Token ${tokenPlaceholder}" \\
+  -d @mist-template.json | python3 -m json.tool`;
+
+  const doCopy = (text) => {
+    try {
+      navigator.clipboard.writeText(text)
+        .then(() => showToast('3-step cURL script copied — paste in your terminal', '⌨', true))
+        .catch(() => fallbackCopy(text));
+    } catch(e) { fallbackCopy(text); }
+  };
+
+  const fallbackCopy = (text) => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    showToast('3-step cURL script copied — paste in your terminal', '⌨', true);
+  };
+
+  doCopy(curl);
+}
+</script>
+</body>
+</html>
