@@ -650,9 +650,12 @@
         <label>Template name:</label>
         <input type="text" id="templateName" value="Converted-from-Cisco" placeholder="e.g. Campus-LAN">
       </div>
-      <div class="template-name-wrap" style="flex:0 1 240px">
+      <div class="template-name-wrap" style="flex:0 1 280px">
         <label>Root password:</label>
-        <input type="password" id="rootPassword" placeholder="Optional — leave blank to omit" autocomplete="new-password">
+        <div style="flex:1;display:flex;gap:4px">
+          <input type="password" id="rootPassword" placeholder="Optional — leave blank to omit" autocomplete="off" style="flex:1;background:var(--code-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;padding:6px 10px;outline:none;">
+          <button type="button" onclick="toggleRootPw()" id="rootPwToggle" title="Show/hide" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text-dim);font-size:12px;padding:0 8px;cursor:pointer;flex-shrink:0">👁</button>
+        </div>
       </div>
       <button class="btn btn-primary" onclick="runConvert()">⚡ Convert</button>
     </div>
@@ -2194,6 +2197,21 @@ curl -s -X ${method} "${url}" \\
   };
 
   doCopy(curl);
+}
+
+// ── Root password show/hide toggle ─────────────────────────────
+function toggleRootPw() {
+  const input = document.getElementById('rootPassword');
+  const btn   = document.getElementById('rootPwToggle');
+  if (input.type === 'password') {
+    input.type = 'text';
+    btn.textContent = '🙈';
+    btn.title = 'Hide password';
+  } else {
+    input.type = 'password';
+    btn.textContent = '👁';
+    btn.title = 'Show password';
+  }
 }
 
 // ── Theme toggle ───────────────────────────────────────────────
