@@ -1524,8 +1524,7 @@ function parseSyslog(lines) {
 }
 
 function parseDhcpSnooping(lines) {
-  const enabled = lines.some(l => /^ip dhcp snooping$/.test(l.trim()));
-  if (!enabled) return { enabled: false };
+  // Always enable DHCP snooping by default; honour any extra options from config
   return {
     enabled: true,
     all_networks: true,
