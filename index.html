@@ -1600,7 +1600,7 @@ function convert(configText, templateName, rootPassword = '') {
   // Build switch_matching rule
   const switchMatchingRule = {
     name: templateName,
-    match_role: templateName.toLowerCase().replace(/\s+/g, '-'),
+    match_role: templateName.toLowerCase().replace(/[^a-z0-9_-]/g, '-'),
     ip_config: { network: 'default', type: 'dhcp' },
     oob_ip_config: { type: 'dhcp', use_mgmt_vrf: false },
     port_config: compressedPortConfig,
