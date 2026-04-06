@@ -291,11 +291,12 @@
   textarea:focus { border-color: var(--accent); }
 
   .convert-bar {
-    padding: 12px 16px;
+    padding: 10px 16px;
     border-top: 1px solid var(--border);
     display: flex;
     align-items: center;
-    gap: 10px;
+    flex-wrap: wrap;
+    gap: 8px;
     flex-shrink: 0;
     background: var(--surface2);
   }
@@ -305,6 +306,7 @@
     align-items: center;
     gap: 8px;
     flex: 1;
+    min-width: 180px;
   }
   .template-name-wrap label { font-size: 12px; color: var(--text-dim); white-space: nowrap; }
   .template-name-wrap input {
@@ -318,6 +320,7 @@
     outline: none;
   }
   .template-name-wrap input:focus { border-color: var(--accent); }
+  .template-name-wrap input::placeholder { color: var(--text-dimmer); }
 
   /* ── Output panel ────────────────────────── */
   .output-area {
@@ -646,6 +649,10 @@
       <div class="template-name-wrap">
         <label>Template name:</label>
         <input type="text" id="templateName" value="Converted-from-Cisco" placeholder="e.g. Campus-LAN">
+      </div>
+      <div class="template-name-wrap" style="flex:0 1 240px">
+        <label>Root password:</label>
+        <input type="password" id="rootPassword" placeholder="Optional — leave blank to omit" autocomplete="new-password">
       </div>
       <button class="btn btn-primary" onclick="runConvert()">⚡ Convert</button>
     </div>
@@ -1410,6 +1417,63 @@ function parseTacacs(lines) {
   return { enabled: true, servers, tacplus_servers: servers, default_role: 'admin' };
 }
 
+// ── Local accounts ─────────────────────────────────────────────
+
+function parseLocalAccounts(lines) {
+  const accounts = {};
+  for (const line of lines) {
+    const s = line.trim();
+    // Match: username <name> [privilege <level>] secret|password [type] <hash>
+    // Cisco formats: "secret 5 $1$hash" or "secret $1$hash" or "password 0 cleartext"
+    const m = s.match(/^username\s+(\S+)(?:\s+privilege\s+(\d+))?\s+(?:secret|password)\s+(?:\d\s+)?(\S+)/i);
+    if (m) {
+      const name  = m[1];
+      const priv  = parseInt(m[2] || '1', 10);
+      const hash  = m[3];
+      // Cisco privilege 15 → Mist "super"; 7-14 → "operator"; 0-6 → "read"
+      const role  = priv === 15 ? 'super' : priv >= 7 ? 'operator' : 'read';
+      accounts[name] = { role, password: hash };
+    }
+  }
+  return accounts;
+}
+
+// ── Login / MOTD banner ────────────────────────────────────────
+
+function parseBanner(lines) {
+  let banner    = '';
+  let inBanner  = false;
+  let delimiter = '';
+  for (const line of lines) {
+    if (!inBanner) {
+      // banner login ^C ... or banner motd X ...  (delimiter is first non-space char after keyword)
+      const m = line.trim().match(/^banner\s+(?:login|motd)\s+(\^C|\x03|.)(.*)$/i);
+      if (m) {
+        delimiter = m[1];   // e.g. "^C" (two chars) or a single character
+        const rest = m[2];
+        const closeIdx = rest.indexOf(delimiter);
+        if (closeIdx !== -1) {
+          // entire banner on one line
+          banner = rest.substring(0, closeIdx).trim();
+        } else {
+          banner    = rest;
+          inBanner  = true;
+        }
+      }
+    } else {
+      const closeIdx = line.indexOf(delimiter);
+      if (closeIdx !== -1) {
+        const chunk = line.substring(0, closeIdx);
+        if (chunk) banner += (banner ? '\n' : '') + chunk;
+        inBanner = false;
+      } else {
+        banner += (banner ? '\n' : '') + line;
+      }
+    }
+  }
+  return banner.trim();
+}
+
 // ── SNMP ───────────────────────────────────────────────────────
 
 function parseSnmp(lines) {
@@ -1469,7 +1533,7 @@ function parseDhcpSnooping(lines) {
 
 // ── MAIN CONVERT ───────────────────────────────────────────────
 
-function convert(configText, templateName) {
+function convert(configText, templateName, rootPassword = '') {
   const lines = configText.split('\n');
   const infos = []; // informational conversion notes (not errors)
 
@@ -1493,13 +1557,15 @@ function convert(configText, templateName) {
   // Compress consecutive same-config interfaces into Mist range notation
   const compressedPortConfig = compressPortRanges(portConfigMap);
 
-  const radiusConfig = parseRadius(lines);
-  const tacacsConfig = parseTacacs(lines);
-  const snmpConfig   = parseSnmp(lines);
-  const ntpServers   = parseNtp(lines);
-  const dnsServers   = parseDns(lines);
-  const syslog       = parseSyslog(lines);
-  const dhcpSnooping = parseDhcpSnooping(lines);
+  const radiusConfig  = parseRadius(lines);
+  const tacacsConfig  = parseTacacs(lines);
+  const snmpConfig    = parseSnmp(lines);
+  const ntpServers    = parseNtp(lines);
+  const dnsServers    = parseDns(lines);
+  const syslog        = parseSyslog(lines);
+  const dhcpSnooping  = parseDhcpSnooping(lines);
+  const localAccounts = parseLocalAccounts(lines);
+  const loginBanner   = parseBanner(lines);
 
   // Hostname
   const hostnameMatch = lines.map(l => l.trim().match(/^hostname\s+(\S+)/)).find(Boolean);
@@ -1570,10 +1636,11 @@ function convert(configText, templateName) {
     switch_mgmt: {
       config_revert_timer: 5,
       dhcp_option_fqdn: false,
-      local_accounts: {},
-      protect_re: { enabled: false },
-      root_password: '',
-      tacacs: tacacsConfig
+      local_accounts: localAccounts,
+      protect_re: { enabled: true },
+      root_password: rootPassword || '',
+      tacacs: tacacsConfig,
+      ...(loginBanner ? { banner: loginBanner } : {})
     },
     stp_config: {
       mode: mistStpMode
@@ -1707,9 +1774,10 @@ function runConvert() {
   }
 
   const templateName = document.getElementById('templateName').value.trim() || 'Converted-from-Cisco';
+  const rootPassword = document.getElementById('rootPassword').value.trim();
   currentTemplateName = templateName;
 
-  const { template, stats, portTableRows, warnings, infos } = convert(config, templateName);
+  const { template, stats, portTableRows, warnings, infos } = convert(config, templateName, rootPassword);
   currentTemplate = template;
 
   renderOutput(template, stats, portTableRows, warnings, infos);
@@ -1817,6 +1885,22 @@ function renderSummary(template, stats) {
           <li><strong>SNMP:</strong> ${stats.snmpEnabled ? '✓ Enabled' : 'Disabled'}</li>
           <li><strong>Syslog:</strong> ${template.remote_syslog.enabled ? '✓ Enabled' : 'Disabled'}</li>
           <li><strong>TACACS:</strong> ${template.switch_mgmt.tacacs.enabled ? '✓ Enabled' : 'Disabled'}</li>
+        </ul>
+      </section>
+      <section>
+        <h3 style="font-size:12px;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-dim);margin-bottom:8px">Switch Management (switch_mgmt)</h3>
+        <ul style="list-style:none;display:flex;flex-direction:column;gap:4px;font-size:12px">
+          <li><strong>RE Protection:</strong> <span style="color:var(--green)">✓ Enabled</span></li>
+          <li><strong>Local Accounts:</strong> ${
+            (() => {
+              const accts = Object.entries(template.switch_mgmt.local_accounts || {});
+              return accts.length
+                ? accts.map(([u, a]) => `${u} <span style="color:var(--text-dimmer)">(${a.role})</span>`).join(', ')
+                : '<span style="color:var(--text-dimmer)">None parsed from config</span>';
+            })()
+          }</li>
+          <li><strong>Root Password:</strong> ${template.switch_mgmt.root_password ? '✓ Set' : '<span style="color:var(--text-dimmer)">Not set</span>'}</li>
+          <li><strong>Login Banner:</strong> ${template.switch_mgmt.banner ? `✓ Migrated (${template.switch_mgmt.banner.length} chars)` : '<span style="color:var(--text-dimmer)">None found in config</span>'}</li>
         </ul>
       </section>
       <section>
