@@ -121,6 +121,17 @@
     color: #84B135;
     border: 1px solid rgba(132,177,53,0.35);
   }
+  .badge-vendor {
+    font-size: 10px; font-weight: 700;
+    padding: 2px 8px; border-radius: 99px;
+    text-transform: uppercase; letter-spacing: 0.6px;
+    display: none;
+  }
+  .badge-cisco    { background: rgba(0,180,200,0.13); color: #00B4C8; border: 1px solid rgba(0,180,200,0.35); }
+  .badge-junos    { background: rgba(132,177,53,0.15); color: #84B135; border: 1px solid rgba(132,177,53,0.40); }
+  .badge-aruba    { background: rgba(255,102,0,0.13);  color: #FF7A30; border: 1px solid rgba(255,102,0,0.35); }
+  .badge-arista   { background: rgba(200,80,80,0.13);  color: #E06060; border: 1px solid rgba(200,80,80,0.35); }
+  .badge-unknown  { background: rgba(138,155,181,0.13); color: var(--text-dim); border: 1px solid var(--border); }
 
   /* ── Theme toggle button ─────────────────── */
   .theme-toggle {
@@ -598,7 +609,7 @@
         <span class="logo-divider">|</span>
         <span class="logo-appname">Mist</span>
       </div>
-      <div class="logo-tagline">Cisco → Wired Assurance Converter</div>
+      <div class="logo-tagline">Multi-Vendor → Wired Assurance Converter</div>
     </div>
   </div>
   <div class="header-actions">
@@ -616,7 +627,8 @@
   <div class="panel">
     <div class="panel-header">
       <div class="dot" id="inputDot"></div>
-      <span class="panel-title">Cisco IOS Configuration</span>
+      <span class="panel-title" id="inputPanelTitle">Switch Configuration</span>
+      <span id="vendorBadge" class="badge-vendor"></span>
       <span class="panel-subtitle" id="inputSubtitle">Paste or upload a switch config</span>
     </div>
 
@@ -624,8 +636,8 @@
       <!-- Dropzone -->
       <div class="dropzone" id="dropzone">
         <div class="dropzone-icon">📂</div>
-        <h3>Drop your Cisco config here</h3>
-        <p>Supports IOS 12.x · 15.x · 16.x · IOS-XE<br>Catalyst 2960 · 3560 · 3650 · 3850 · 9xxx</p>
+        <h3>Drop your switch config here</h3>
+        <p>Cisco IOS · Juniper Junos · Aruba CX · Arista EOS<br>Vendor auto-detected on load</p>
         <label class="btn btn-primary" style="margin-top:4px">
           Browse file
           <input type="file" id="fileInput" accept=".txt,.cfg,.conf,.log,.ios">
@@ -1133,12 +1145,13 @@ function buildPortUsages(ifaces, byId, vlans) {
   }
 
   for (const [ifaceName, props] of Object.entries(ifaces)) {
-    // Skip non-switchport interfaces
+    // Skip non-switchport interfaces (Cisco + Junos + Aruba + Arista names)
     if (/loopback|tunnel|vlan|bdi|fastethernet0$|mgmt/i.test(ifaceName)) continue;
+    if (/^(lo|em|fxp|bme|irb|vme)\d/i.test(ifaceName)) continue; // Junos mgmt/loopback
 
-    // Skip Port-channel / ae interfaces — Mist configures the physical
-    // member ports directly; the ae interface itself is not listed in port_config.
+    // Skip LAG master interfaces — Mist configures the physical member ports directly.
     if (/^port-channel/i.test(ifaceName)) continue;
+    if (/^ae\d/i.test(ifaceName)) continue; // Junos ae / post-converted
 
     const hasConfig = props.mode || props.accessVlan !== undefined ||
                       props.trunkVlans || props.voiceVlan || props.portAuth ||
@@ -1533,69 +1546,523 @@ function parseDhcpSnooping(lines) {
   };
 }
 
+// ══════════════════════════════════════════════════════════════
+//  MULTI-VENDOR SUPPORT
+// ══════════════════════════════════════════════════════════════
+
+// ── Vendor detection ───────────────────────────────────────────
+
+function detectVendor(text) {
+  const head = text.substring(0, 6000);
+  // Junos set-style: lines beginning with "set "
+  if (/^set\s+(system|interfaces|vlans|protocols|snmp|poe|chassis|policy)/m.test(head)) return 'junos';
+  // Junos hierarchical: top-level blocks like "interfaces {" or "vlans {"
+  if (/^(interfaces|vlans|system|protocols|chassis)\s*\{/m.test(head)) return 'junos';
+  // Aruba CX: interface 1/1/X notation
+  if (/^interface\s+\d+\/\d+\/\d+/m.test(head)) return 'aruba-cx';
+  // Arista EOS: interface EthernetX (bare number, no slot)
+  if (/^interface\s+Ethernet\d+($|\/)/m.test(head)) return 'arista-eos';
+  if (/daemon\s+TerminAttr|Arista\s+vEOS|EOS\s+version/m.test(head)) return 'arista-eos';
+  // Cisco IOS / IOS-XE
+  if (/^interface\s+(GigabitEthernet|FastEthernet|TenGigabitEthernet|HundredGig)/m.test(head)) return 'cisco-ios';
+  if (/^(ip dhcp snooping|spanning-tree mode|no service pad|service password-encryption)/m.test(head)) return 'cisco-ios';
+  return 'unknown';
+}
+
+// ── Shared helper: build Mist-format RADIUS config ─────────────
+
+function buildMistRadius(servers) {
+  if (!servers.length) return { enabled: false };
+  return {
+    enabled: true,
+    auth_servers: servers.map(s => ({ host: s.host, secret: s.secret, port: s.port || 1812 })),
+    acct_servers: servers.map(s => ({ host: s.host, secret: s.secret, port: (s.port || 1812) + 1 })),
+    auth_server_selection: 'ordered',
+    auth_servers_retries: 3,
+    auth_servers_timeout: 5,
+    acct_interim_interval: 0,
+    coa_enabled: false,
+    coa_port: 3799,
+    fast_dot1x_timers: false,
+    network: 'default'
+  };
+}
+
+function buildMistTacacs(servers) {
+  if (!servers.length) return { enabled: false };
+  return { enabled: true, servers, tacplus_servers: servers, default_role: 'admin' };
+}
+
+function buildMistSnmp(communities, contact, location, trapHosts) {
+  if (!communities.length) return { enabled: false };
+  const cfg = { enabled: true, contact: contact || '', location: location || '', v2c_config: communities };
+  if (trapHosts && trapHosts.length)
+    cfg.trap_groups = [{ name: 'default', targets: trapHosts.map(t => t.ip), version: 'v2' }];
+  return cfg;
+}
+
+// ── Cisco IOS wrapper (normalises existing parsers) ────────────
+
+function parseCiscoConfig(text) {
+  const lines = text.split('\n');
+  const { vlans, byId } = parseVlans(lines);
+  const ifaces          = parseInterfaces(lines);
+  const domainMatch     = lines.map(l => l.trim().match(/^ip domain-name\s+(\S+)/)).find(Boolean);
+  const hostnameMatch   = lines.map(l => l.trim().match(/^hostname\s+(\S+)/)).find(Boolean);
+  const stpMatch        = lines.map(l => l.trim().match(/^spanning-tree mode\s+(\S+)/)).find(Boolean);
+  return {
+    vlans, byId, ifaces,
+    localAccounts : parseLocalAccounts(lines),
+    loginBanner   : parseBanner(lines),
+    radiusConfig  : parseRadius(lines),
+    tacacsConfig  : parseTacacs(lines),
+    snmpConfig    : parseSnmp(lines),
+    ntpServers    : parseNtp(lines),
+    dnsServers    : parseDns(lines),
+    dnsSuffix     : domainMatch ? [domainMatch[1]] : [],
+    syslog        : parseSyslog(lines),
+    dhcpSnooping  : parseDhcpSnooping(lines),
+    hostname      : hostnameMatch ? hostnameMatch[1] : '',
+    stpModeStr    : stpMatch ? stpMatch[1].toLowerCase() : null,
+    lldpEnabled   : lines.some(l => /^lldp run/.test(l.trim())),
+    hasDot1x      : lines.some(l => /dot1x system-auth-control/.test(l.trim())),
+    addlCmds      : hostnameMatch ? [`# Original hostname: ${hostnameMatch[1]}`] : [],
+  };
+}
+
+// ── Junos set-style parser ──────────────────────────────────────
+
+function parseJunosSetStyle(text) {
+  const lines = text.split('\n');
+  const vlans = {}, byId = {}, ifaces = {}, localAccounts = {};
+  let loginBanner = '', hostname = '', domain = '';
+  const ntpServers = [], dnsServers = [], radiusSrvs = [], tacacsSrvs = [];
+  const snmpComm = [], snmpTraps = [];
+  let snmpContact = '', snmpLocation = '';
+  const syslogHosts = [];
+  let stpModeStr = null, lldpEnabled = false;
+
+  function gi(name) {
+    if (!ifaces[name]) ifaces[name] = { rawLines: [] };
+    return ifaces[name];
+  }
+
+  for (const line of lines) {
+    const s = line.trim();
+    if (!s || s.startsWith('#')) continue;
+    let m;
+
+    // VLANs
+    if ((m = s.match(/^set vlans (\S+) vlan-id (\d+)/))) {
+      vlans[m[1]] = { vlan_id: +m[2], subnet: '' };
+      byId[+m[2]] = m[1];
+      continue;
+    }
+    if ((m = s.match(/^set vlans (\S+) l3-interface (irb\.\d+)/))) continue; // skip L3
+
+    // Interfaces — description
+    if ((m = s.match(/^set interfaces ([\w/-]+) description "?([^"]+)"?/))) {
+      gi(m[1]).description = m[2].trim().replace(/^"|"$/g,'');
+      continue;
+    }
+    // Interface mode
+    if ((m = s.match(/^set interfaces ([\w/-]+) unit 0 family ethernet-switching interface-mode (\S+)/))) {
+      gi(m[1]).mode = m[2];
+      continue;
+    }
+    // VLAN members — bracketed list [V1 V2]
+    if ((m = s.match(/^set interfaces ([\w/-]+) unit 0 family ethernet-switching vlan members \[([^\]]+)\]/))) {
+      const names = m[2].trim().split(/\s+/);
+      gi(m[1]).junosTrunkVlans = (gi(m[1]).junosTrunkVlans || []).concat(names);
+      continue;
+    }
+    // VLAN members — single
+    if ((m = s.match(/^set interfaces ([\w/-]+) unit 0 family ethernet-switching vlan members (\S+)/))) {
+      gi(m[1]).junosTrunkVlans = (gi(m[1]).junosTrunkVlans || []).concat([m[2]]);
+      continue;
+    }
+    // Native VLAN
+    if ((m = s.match(/^set interfaces ([\w/-]+) unit 0 family ethernet-switching native-vlan-id (\d+)/))) {
+      gi(m[1]).nativeVlan = +m[2];
+      continue;
+    }
+    // Disabled
+    if ((m = s.match(/^set interfaces ([\w/-]+) disable$/))) {
+      gi(m[1]).disabled = true;
+      continue;
+    }
+    // LAG member
+    if ((m = s.match(/^set interfaces ([\w/-]+) ether-options 802\.3ad (ae\d+)/))) {
+      gi(m[1]).aggregated = true;
+      gi(m[1]).aeIdx = parseInt(m[2].replace('ae',''), 10);
+      gi(m[1]).aeDisableLacp = false;
+      continue;
+    }
+    // PoE disable
+    if ((m = s.match(/^set poe interface ([\w/-]+) disable/))) {
+      gi(m[1]).poeDisabled = true;
+      continue;
+    }
+    // STP edge
+    if ((m = s.match(/^set protocols rstp interface ([\w/-]+) (edge|no-root-port)/))) {
+      if (m[2] === 'edge') gi(m[1]).stpEdge = true;
+      continue;
+    }
+    // Speed
+    if ((m = s.match(/^set interfaces ([\w/-]+) ether-options speed (\S+)/))) {
+      gi(m[1]).speed = m[2].replace(/g$/, '000').replace(/m$/, '');
+      continue;
+    }
+
+    // System
+    if ((m = s.match(/^set system host-name (\S+)/)))    { hostname = m[1]; continue; }
+    if ((m = s.match(/^set system domain-name (\S+)/)))  { domain   = m[1]; continue; }
+    if ((m = s.match(/^set system ntp server (\S+)/)))   { ntpServers.push(m[1]); continue; }
+    if ((m = s.match(/^set system name-server (\S+)/)))  { dnsServers.push(m[1]); continue; }
+
+    // Login users
+    if ((m = s.match(/^set system login user (\S+) class (\S+)/))) {
+      if (!localAccounts[m[1]]) localAccounts[m[1]] = { role: 'read', password: '' };
+      localAccounts[m[1]].role = m[2] === 'super-user' ? 'super' : m[2] === 'operator' ? 'operator' : 'read';
+      continue;
+    }
+    if ((m = s.match(/^set system login user (\S+) authentication (?:encrypted-password|plain-text-password) "?([^"\s]+)"?/))) {
+      if (!localAccounts[m[1]]) localAccounts[m[1]] = { role: 'read', password: '' };
+      localAccounts[m[1]].password = m[2];
+      continue;
+    }
+    if ((m = s.match(/^set system login message "?(.+)"?/))) {
+      loginBanner = m[1].replace(/^"|"$/g, '');
+      continue;
+    }
+
+    // RADIUS
+    if ((m = s.match(/^set system radius-server (\S+) secret "?([^"\s]+)"?/)))
+      { radiusSrvs.push({ host: m[1], secret: m[2], port: 1812 }); continue; }
+
+    // TACACS
+    if ((m = s.match(/^set system tacplus-server (\S+) secret "?([^"\s]+)"?/)))
+      { tacacsSrvs.push({ host: m[1], secret: m[2], port: 49, timeout: 10 }); continue; }
+
+    // SNMP
+    if ((m = s.match(/^set snmp community (\S+) authorization/)))
+      { snmpComm.push({ community: m[1], view: 'all' }); continue; }
+    if ((m = s.match(/^set snmp contact "?([^"]+)"?/)))    { snmpContact  = m[1]; continue; }
+    if ((m = s.match(/^set snmp location "?([^"]+)"?/)))   { snmpLocation = m[1]; continue; }
+    if ((m = s.match(/^set snmp trap-group \S+ targets (\S+)/)))
+      { snmpTraps.push({ ip: m[1] }); continue; }
+
+    // Syslog
+    if ((m = s.match(/^set system syslog host (\S+)/)))    { syslogHosts.push(m[1]); continue; }
+
+    // STP / LLDP
+    if (/^set protocols rstp$/.test(s))                    { stpModeStr = 'rstp'; continue; }
+    if (/^set protocols mstp/.test(s))                     { stpModeStr = 'mstp'; continue; }
+    if (/^set protocols lldp/.test(s))                     { lldpEnabled = true; continue; }
+  }
+
+  // Resolve VLAN names → IDs on interface props
+  for (const props of Object.values(ifaces)) {
+    if (!props.junosTrunkVlans) continue;
+    const mode = props.mode || 'access';
+    if (mode === 'access' && props.junosTrunkVlans.length) {
+      const vn = props.junosTrunkVlans[0];
+      const vid = vlans[vn]?.vlan_id;
+      if (vid) props.accessVlan = vid;
+    } else {
+      const ids = props.junosTrunkVlans
+        .map(vn => vlans[vn]?.vlan_id).filter(Boolean);
+      if (ids.length) props.trunkVlans = ids.join(',');
+    }
+    delete props.junosTrunkVlans;
+  }
+
+  delete vlans['default']; delete byId[1];
+
+  return {
+    vlans, byId, ifaces, localAccounts, loginBanner,
+    radiusConfig  : buildMistRadius(radiusSrvs),
+    tacacsConfig  : buildMistTacacs(tacacsSrvs),
+    snmpConfig    : buildMistSnmp(snmpComm, snmpContact, snmpLocation, snmpTraps),
+    ntpServers    : [...new Set(ntpServers)],
+    dnsServers    : [...new Set(dnsServers)],
+    dnsSuffix     : domain ? [domain] : [],
+    syslog        : syslogHosts.length ? { enabled: true, servers: syslogHosts.map(h => ({ host: h })) } : { enabled: false },
+    dhcpSnooping  : { enabled: true, all_networks: true, enable_arp_spoof_check: false, enable_ip_source_guard: false },
+    hostname, stpModeStr, lldpEnabled, hasDot1x: false,
+    addlCmds      : hostname ? [`# Original hostname: ${hostname}`] : [],
+  };
+}
+
+// ── Junos hierarchical → set-style converter ───────────────────
+
+function parseJunosHierarchical(text) {
+  // Walk the block structure and emit synthetic "set ..." lines,
+  // then hand off to the set-style parser.
+  const setLines = [];
+  const stack = [];
+  for (const line of text.split('\n')) {
+    const s = line.trim();
+    if (!s || s.startsWith('/*') || s.startsWith('*') || s === '}') {
+      if (s === '}') stack.pop();
+      continue;
+    }
+    if (s.endsWith('{')) {
+      stack.push(s.slice(0, -1).trim());
+    } else if (s.endsWith(';')) {
+      const val = s.slice(0, -1).trim();
+      setLines.push('set ' + [...stack, val].join(' '));
+    }
+  }
+  return parseJunosSetStyle(setLines.join('\n'));
+}
+
+function parseJunosConfig(text) {
+  // Detect set-style vs hierarchical
+  const setCount  = (text.match(/^set\s+/mg) || []).length;
+  const braceCount = (text.match(/\{/g) || []).length;
+  return setCount >= braceCount ? parseJunosSetStyle(text) : parseJunosHierarchical(text);
+}
+
+// ── Aruba CX (AOS-CX) converter + parser ──────────────────────
+
+function arubaCXToJunos(name) {
+  // 1/1/X → ge-0/0/(X-1)  |  lag N → aeN  |  management → skip
+  let m = name.match(/^(\d+)\/(\d+)\/(\d+)$/);
+  if (m) return `ge-${Math.max(0,+m[1]-1)}/0/${Math.max(0,+m[3]-1)}`;
+  m = name.match(/^lag\s+(\d+)$/i);
+  if (m) return `ae${m[1]}`;
+  return name.toLowerCase().replace(/\s+/g,'-');
+}
+
+function parseArubaCXConfig(text) {
+  const lines = text.split('\n');
+  const vlans = {}, byId = {}, rawIfaces = {}, localAccounts = {};
+  let loginBanner = '', hostname = '', domain = '';
+  const ntpServers = [], dnsServers = [], radiusSrvs = [], tacacsSrvs = [];
+  const snmpComm = [], syslogHosts = [];
+  let stpModeStr = null, lldpEnabled = false;
+  let curBlock = null, curVlan = null, inBanner = false, bannerDelim = '';
+
+  for (const line of lines) {
+    const s = line.trim();
+    if (!s) continue;
+
+    if (inBanner) {
+      if (s.includes(bannerDelim)) { inBanner = false; }
+      else loginBanner += (loginBanner ? '\n' : '') + s;
+      continue;
+    }
+
+    let m;
+    if ((m = s.match(/^hostname\s+(\S+)/)))           { hostname = m[1]; curBlock = null; curVlan = null; continue; }
+    if ((m = s.match(/^ip domain-name\s+(\S+)/)))     { domain   = m[1]; continue; }
+
+    // VLAN block
+    if ((m = s.match(/^vlan\s+(\d+)$/))) {
+      curVlan = +m[1]; curBlock = null;
+      if (curVlan !== 1) { vlans[`vlan${curVlan}`] = { vlan_id: curVlan, subnet: '' }; byId[curVlan] = `vlan${curVlan}`; }
+      continue;
+    }
+    if (curVlan && (m = s.match(/^name\s+(\S+)/))) {
+      const old = `vlan${curVlan}`;
+      if (vlans[old]) { vlans[m[1]] = vlans[old]; delete vlans[old]; }
+      byId[curVlan] = m[1];
+      continue;
+    }
+
+    // Interface block
+    if ((m = s.match(/^interface\s+(.+)$/))) {
+      curBlock = m[1].trim(); curVlan = null;
+      if (!rawIfaces[curBlock]) rawIfaces[curBlock] = { rawLines: [] };
+      continue;
+    }
+    if (curBlock && line.match(/^\s/)) {
+      const p = rawIfaces[curBlock];
+      p.rawLines.push(s);
+      if ((m = s.match(/^description\s+"?([^"]+)"?/)))       p.description = m[1].trim();
+      if ((m = s.match(/^vlan\s+access\s+(\d+)/)))            { p.mode = 'access'; p.accessVlan = +m[1]; }
+      if ((m = s.match(/^vlan\s+trunk\s+native\s+(\d+)/)))    p.nativeVlan = +m[1];
+      if ((m = s.match(/^vlan\s+trunk\s+allowed\s+(.+)/)))    { p.mode = 'trunk'; p.trunkVlans = m[1].trim(); }
+      if (s === 'shutdown')                                    p.disabled = true;
+      if ((m = s.match(/^lag\s+(\d+)/)))                      { p.aggregated = true; p.aeIdx = +m[1]; p.aeDisableLacp = false; }
+      if (s.match(/^spanning-tree portfast|port-type admin-edge/)) p.stpEdge = true;
+      if (s.match(/^spanning-tree bpdu-guard/))               p.bpduguard = true;
+      if (s.match(/^poe-disable/))                             p.poeDisabled = true;
+      if ((m = s.match(/^speed\s+(\S+)/)))                    p.speed = m[1];
+      continue;
+    } else { curBlock = null; curVlan = null; }
+
+    if ((m = s.match(/^ntp server\s+(\S+)/)))                 { ntpServers.push(m[1]); continue; }
+    if ((m = s.match(/^ip dns server-address\s+(.+)/)))       { dnsServers.push(...m[1].trim().split(/\s+/)); continue; }
+    if ((m = s.match(/^radius-server host\s+(\S+)\s+key\s+"?([^"\s]+)"?/)))
+      { radiusSrvs.push({ host: m[1], secret: m[2], port: 1812 }); continue; }
+    if ((m = s.match(/^tacacs-server host\s+(\S+)\s+key\s+"?([^"\s]+)"?/)))
+      { tacacsSrvs.push({ host: m[1], secret: m[2], port: 49, timeout: 10 }); continue; }
+    if ((m = s.match(/^snmp-server community\s+(\S+)/)))
+      { snmpComm.push({ community: m[1], view: 'all' }); continue; }
+    if ((m = s.match(/^logging\s+(\d+\.\d+\.\d+\.\d+)/)))    { syslogHosts.push(m[1]); continue; }
+    if ((m = s.match(/^spanning-tree mode\s+(\S+)/)))
+      { stpModeStr = m[1].toLowerCase().replace('rapid-pvst','rstp').replace('pvst','rstp'); continue; }
+    if (s.match(/^lldp\s+(run|enable)/))                       { lldpEnabled = true; continue; }
+    if ((m = s.match(/^user\s+(\S+)\s+group\s+(\S+)/))) {
+      const role = /admin/i.test(m[2]) ? 'super' : /oper/i.test(m[2]) ? 'operator' : 'read';
+      localAccounts[m[1]] = { role, password: '' };
+      continue;
+    }
+    if ((m = s.match(/^banner\s+(?:motd|login)\s+(\S)(.*)/))) {
+      bannerDelim = m[1]; loginBanner = m[2] || ''; inBanner = true; continue;
+    }
+  }
+
+  // Pre-convert interface keys to Junos format and skip ae/management
+  const ifaces = {};
+  for (const [raw, props] of Object.entries(rawIfaces)) {
+    if (/^(management|loopback|oobm)/i.test(raw)) continue;
+    if (/^lag\s/i.test(raw)) continue; // skip LAG master interfaces
+    const junos = arubaCXToJunos(raw);
+    ifaces[junos] = props;
+    // Register any referenced VLANs
+    if (props.accessVlan && !(props.accessVlan in byId) && props.accessVlan !== 1) {
+      const n = `vlan${props.accessVlan}`;
+      vlans[n] = { vlan_id: props.accessVlan, subnet: '' }; byId[props.accessVlan] = n;
+    }
+    if (props.trunkVlans) {
+      for (const vid of expandVlanRange(props.trunkVlans)) {
+        if (vid !== 1 && !(vid in byId)) {
+          const n = `vlan${vid}`; vlans[n] = { vlan_id: vid, subnet: '' }; byId[vid] = n;
+        }
+      }
+    }
+  }
+  delete vlans['vlan1']; delete byId[1];
+
+  return {
+    vlans, byId, ifaces, localAccounts, loginBanner,
+    radiusConfig  : buildMistRadius(radiusSrvs),
+    tacacsConfig  : buildMistTacacs(tacacsSrvs),
+    snmpConfig    : buildMistSnmp(snmpComm, '', '', []),
+    ntpServers    : [...new Set(ntpServers)],
+    dnsServers    : [...new Set(dnsServers)],
+    dnsSuffix     : domain ? [domain] : [],
+    syslog        : syslogHosts.length ? { enabled: true, servers: syslogHosts.map(h => ({ host: h })) } : { enabled: false },
+    dhcpSnooping  : { enabled: true, all_networks: true, enable_arp_spoof_check: false, enable_ip_source_guard: false },
+    hostname, stpModeStr, lldpEnabled, hasDot1x: false,
+    addlCmds      : hostname ? [`# Original hostname: ${hostname}`] : [],
+  };
+}
+
+// ── Arista EOS converter + parser ─────────────────────────────
+
+function aristaToJunos(name) {
+  const lower = name.toLowerCase();
+  let m;
+  // Ethernet1 → ge-0/0/0  |  Ethernet1/1 → ge-0/0/0 (simplified)
+  m = lower.match(/^ethernet(\d+)(?:\/(\d+))?$/);
+  if (m) {
+    const port = Math.max(0, +m[1] - 1);
+    return m[2] ? `ge-0/${port}/${Math.max(0,+m[2]-1)}` : `ge-0/0/${port}`;
+  }
+  m = lower.match(/^port-channel(\d+)$/);
+  if (m) return `ae${m[1]}`;
+  m = lower.match(/^management(\d+)$/);
+  if (m) return `em${m[1]}`;
+  return ciscoToJunos(name); // fallback
+}
+
+function parseAristaConfig(text) {
+  const lines = text.split('\n');
+  // Arista is syntactically nearly identical to Cisco IOS —
+  // reuse Cisco parsers; override user parsing for Arista-specific format.
+  const { vlans, byId } = parseVlans(lines);
+  const ifaces = parseInterfaces(lines);
+
+  // Pre-convert Arista interface keys (Ethernet1 → ge-0/0/0)
+  const convertedIfaces = {};
+  for (const [raw, props] of Object.entries(ifaces)) {
+    if (/^management/i.test(raw)) continue;
+    const junos = aristaToJunos(raw);
+    convertedIfaces[junos] = props;
+  }
+
+  // Arista users: username X privilege Y [role Z] secret [sha512] hash
+  const localAccounts = {};
+  for (const line of lines) {
+    const s = line.trim();
+    const m = s.match(/^username\s+(\S+)(?:\s+privilege\s+(\d+))?(?:\s+role\s+\S+)?\s+(?:secret|password)\s+(?:sha512\s+|0\s+|5\s+)?(\S+)/i);
+    if (m) {
+      const priv = parseInt(m[2] || '1', 10);
+      localAccounts[m[1]] = { role: priv === 15 ? 'super' : priv >= 7 ? 'operator' : 'read', password: m[3] };
+    }
+  }
+
+  const hostnameMatch = lines.map(l => l.trim().match(/^hostname\s+(\S+)/)).find(Boolean);
+  const domainMatch   = lines.map(l => l.trim().match(/^ip domain-name\s+(\S+)/)).find(Boolean);
+  const stpMatch      = lines.map(l => l.trim().match(/^spanning-tree mode\s+(\S+)/)).find(Boolean);
+
+  return {
+    vlans, byId,
+    ifaces         : convertedIfaces,
+    localAccounts,
+    loginBanner    : parseBanner(lines),
+    radiusConfig   : parseRadius(lines),
+    tacacsConfig   : parseTacacs(lines),
+    snmpConfig     : parseSnmp(lines),
+    ntpServers     : parseNtp(lines),
+    dnsServers     : parseDns(lines),
+    dnsSuffix      : domainMatch ? [domainMatch[1]] : [],
+    syslog         : parseSyslog(lines),
+    dhcpSnooping   : parseDhcpSnooping(lines),
+    hostname       : hostnameMatch ? hostnameMatch[1] : '',
+    stpModeStr     : stpMatch ? stpMatch[1].toLowerCase() : null,
+    lldpEnabled    : lines.some(l => /^lldp run/.test(l.trim())),
+    hasDot1x       : lines.some(l => /dot1x system-auth-control/.test(l.trim())),
+    addlCmds       : hostnameMatch ? [`# Original hostname: ${hostnameMatch[1]}`] : [],
+  };
+}
+
 // ── MAIN CONVERT ───────────────────────────────────────────────
 
 function convert(configText, templateName, rootPassword = '') {
-  const lines = configText.split('\n');
-  const infos = []; // informational conversion notes (not errors)
+  const infos = [];
 
-  const { vlans, byId } = parseVlans(lines);
-  const ifaces = parseInterfaces(lines);
+  // ── Dispatch to vendor-specific parser ─────────────────────
+  const vendor = detectVendor(configText);
+  let parsed;
+  if      (vendor === 'junos')      parsed = parseJunosConfig(configText);
+  else if (vendor === 'aruba-cx')   parsed = parseArubaCXConfig(configText);
+  else if (vendor === 'arista-eos') parsed = parseAristaConfig(configText);
+  else                              parsed = parseCiscoConfig(configText);
+
+  const {
+    vlans, byId, ifaces,
+    localAccounts, loginBanner,
+    radiusConfig, tacacsConfig, snmpConfig,
+    ntpServers, dnsServers, dnsSuffix,
+    syslog, dhcpSnooping,
+    hostname, stpModeStr, lldpEnabled, hasDot1x, addlCmds,
+  } = parsed;
+
   const { portUsages, portConfigMap, portTableRows, warnings } = buildPortUsages(ifaces, byId, vlans);
 
-  // Detect dot1x globally
-  const hasDot1x = lines.some(l => /dot1x system-auth-control/.test(l.trim()));
+  // Dot1x global profile (Cisco / Arista only)
   if (hasDot1x && !('dot1x' in portUsages)) {
     const pu = defaultPortUsage('access');
-    pu.port_auth = 'dot1x';
-    pu.enable_mac_auth = true;
-    pu.mac_auth_only   = false;
-    pu.mac_auth_protocol = 'pap';
-    pu.allow_dhcpd = true;
-    pu.stp_edge    = true;
+    pu.port_auth = 'dot1x'; pu.enable_mac_auth = true; pu.mac_auth_only = false;
+    pu.mac_auth_protocol = 'pap'; pu.allow_dhcpd = true; pu.stp_edge = true;
     portUsages['dot1x'] = pu;
   }
 
-  // Compress consecutive same-config interfaces into Mist range notation
   const compressedPortConfig = compressPortRanges(portConfigMap);
 
-  const radiusConfig  = parseRadius(lines);
-  const tacacsConfig  = parseTacacs(lines);
-  const snmpConfig    = parseSnmp(lines);
-  const ntpServers    = parseNtp(lines);
-  const dnsServers    = parseDns(lines);
-  const syslog        = parseSyslog(lines);
-  const dhcpSnooping  = parseDhcpSnooping(lines);
-  const localAccounts = parseLocalAccounts(lines);
-  const loginBanner   = parseBanner(lines);
-
-  // Hostname
-  const hostnameMatch = lines.map(l => l.trim().match(/^hostname\s+(\S+)/)).find(Boolean);
-  const hostname = hostnameMatch ? hostnameMatch[1] : '';
-  const addlCmds = hostname ? [`# Original hostname: ${hostname}`] : [];
-
-  // Domain
-  const domainMatch = lines.map(l => l.trim().match(/^ip domain-name\s+(\S+)/)).find(Boolean);
-  const domain = domainMatch ? domainMatch[1] : '';
-  const dnsSuffix = domain ? [domain] : [];
-
-  // LLDP
-  const lldpEnabled = lines.some(l => /^lldp run/.test(l.trim()));
-
-  // STP mode — auto-convert all PVST variants to RSTP
-  const stpMode = lines.map(l => l.trim().match(/^spanning-tree mode\s+(\S+)/)).find(Boolean);
-  const stpModeStr = stpMode ? stpMode[1].toLowerCase() : null;
-  // Cisco PVST / Rapid-PVST / PVST+ all map to RSTP in Mist (Junos default)
+  // STP — auto-convert PVST variants to RSTP
   const PVST_MODES = ['pvst', 'rapid-pvst', 'pvst+', 'rapid-pvst+'];
-  let mistStpMode = 'rstp'; // safe default
+  let mistStpMode = 'rstp';
   if (stpModeStr === 'mstp') mistStpMode = 'mstp';
-  const stpConverted = stpModeStr && PVST_MODES.includes(stpModeStr);
+  const stpConverted = !!(stpModeStr && PVST_MODES.includes(stpModeStr));
   if (stpConverted) {
-    infos.push(`STP auto-converted: Cisco "${stpModeStr.toUpperCase()}" → Mist "rstp" (RSTP is the Junos/Mist default and is functionally equivalent to Rapid-PVST on a single-VLAN topology)`);
+    infos.push(`STP auto-converted: "${stpModeStr.toUpperCase()}" → Mist "rstp"`);
   }
-
-  // Gateway
-  const gwMatch = lines.map(l => l.trim().match(/^ip default-gateway\s+(\S+)/)).find(Boolean);
 
   // Build switch_matching rule
   const switchMatchingRule = {
@@ -1671,10 +2138,10 @@ function convert(configText, templateName, rootPassword = '') {
     snmpEnabled: snmpConfig.enabled,
     lldpEnabled,
     hostname,
-    domain,
     stpModeOriginal: stpModeStr || 'default',
     stpModeMist: mistStpMode,
-    stpConverted
+    stpConverted,
+    vendor
   };
 
   return { template, stats, portTableRows, warnings, infos };
@@ -1735,6 +2202,9 @@ function showTextarea(content, filename) {
 
   document.getElementById('inputDot').className = 'dot green';
   document.getElementById('inputSubtitle').textContent = filename || 'Config loaded';
+  // Run vendor detection and update badge
+  const text = document.getElementById('configInput').value;
+  if (text) showVendorBadge(detectVendor(text));
 }
 
 function clearInput() {
@@ -1744,13 +2214,41 @@ function clearInput() {
   document.getElementById('fileInfo').style.display = 'none';
   document.getElementById('inputDot').className = 'dot';
   document.getElementById('inputSubtitle').textContent = 'Paste or upload a switch config';
+  document.getElementById('inputPanelTitle').textContent = 'Switch Configuration';
+  showVendorBadge(null);
   fileInput.value = '';
 }
 
-// Auto-show textarea on paste
+// Vendor badge helper
+const VENDOR_LABELS = {
+  'cisco-ios':  { label: 'Cisco IOS',   cls: 'badge-cisco'   },
+  'junos':      { label: 'Juniper Junos', cls: 'badge-junos'  },
+  'aruba-cx':   { label: 'Aruba CX',    cls: 'badge-aruba'   },
+  'arista-eos': { label: 'Arista EOS',  cls: 'badge-arista'  },
+  'unknown':    { label: 'Unknown',     cls: 'badge-unknown'  },
+};
+function showVendorBadge(vendor) {
+  const badge = document.getElementById('vendorBadge');
+  const title = document.getElementById('inputPanelTitle');
+  if (!vendor) {
+    badge.style.display = 'none';
+    badge.className = 'badge-vendor';
+    title.textContent = 'Switch Configuration';
+    return;
+  }
+  const info = VENDOR_LABELS[vendor] || VENDOR_LABELS['unknown'];
+  badge.className = `badge-vendor ${info.cls}`;
+  badge.textContent = info.label;
+  badge.style.display = 'inline-block';
+  title.textContent = `${info.label} Configuration`;
+}
+
+// Auto-show textarea on paste and detect vendor
 document.getElementById('configInput').addEventListener('input', () => {
-  if (document.getElementById('configInput').value) {
+  const val = document.getElementById('configInput').value;
+  if (val) {
     document.getElementById('inputDot').className = 'dot green';
+    showVendorBadge(detectVendor(val));
   }
 });
 
@@ -1782,6 +2280,9 @@ function runConvert() {
   const { template, stats, portTableRows, warnings, infos } = convert(config, templateName, rootPassword);
   currentTemplate = template;
 
+  // Keep vendor badge in sync after conversion
+  showVendorBadge(stats.vendor);
+
   renderOutput(template, stats, portTableRows, warnings, infos);
   document.getElementById('outputDot').className = 'dot blue';
   switchTab('json', document.querySelector('.tab'));
@@ -1800,7 +2301,9 @@ function renderOutput(template, stats, portTableRows, warnings, infos = []) {
 
   // Stats bar
   const statsBar = document.getElementById('statsBar');
+  const vendorInfo = VENDOR_LABELS[stats.vendor] || VENDOR_LABELS['unknown'];
   statsBar.innerHTML = `
+    <div class="stat"><span class="stat-label">Source</span> <span class="stat-value" style="color:var(--accent)">${vendorInfo.label}</span></div>
     <div class="stat"><span class="stat-label">VLANs</span> <span class="stat-value green">${stats.vlans}</span></div>
     <div class="stat"><span class="stat-label">Port Profiles</span> <span class="stat-value green">${stats.portUsages}</span></div>
     <div class="stat"><span class="stat-label">Ports Mapped</span> <span class="stat-value green">${stats.portsMapped}</span></div>
@@ -1882,7 +2385,7 @@ function renderSummary(template, stats) {
           <li><strong>DNS:</strong> ${template.dns_servers.join(', ') || '—'}</li>
           <li><strong>DNS Suffix:</strong> ${template.dns_suffix.join(', ') || '—'}</li>
           <li><strong>DHCP Snooping:</strong> ${template.dhcp_snooping.enabled ? '✓ Enabled' : 'Disabled'}</li>
-          <li><strong>STP:</strong> ${stats.stpConverted ? `✓ Auto-converted from Cisco ${stats.stpModeOriginal.toUpperCase()} → <strong style="color:var(--green)">rstp</strong>` : stats.stpModeMist}</li>
+          <li><strong>STP:</strong> ${stats.stpConverted ? `✓ Auto-converted: ${stats.stpModeOriginal.toUpperCase()} → <strong style="color:var(--green)">rstp</strong>` : stats.stpModeMist}</li>
           <li><strong>LLDP:</strong> ${stats.lldpEnabled ? '✓ Enabled' : 'Disabled'}</li>
           <li><strong>SNMP:</strong> ${stats.snmpEnabled ? '✓ Enabled' : 'Disabled'}</li>
           <li><strong>Syslog:</strong> ${template.remote_syslog.enabled ? '✓ Enabled' : 'Disabled'}</li>
