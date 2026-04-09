@@ -2607,6 +2607,17 @@ function downloadJSON() {
   showToast('Downloaded!', '⬇', true);
 }
 
+// ── Safe JSON reader ──────────────────────────────────────────
+// Reads the response body as text first, then tries to parse as JSON.
+// If the body is an HTML error page (Netlify 502, function crash, etc.)
+// this returns { ok, status, json: null, text } instead of throwing.
+async function safeJson(resp) {
+  const text = await resp.text();
+  let json = null;
+  try { json = JSON.parse(text); } catch (_) { /* not JSON */ }
+  return { ok: resp.ok, status: resp.status, json, text };
+}
+
 // ── Mist API fetch (proxy-aware) ───────────────────────────────
 // On Netlify the browser calls /.netlify/functions/mist-proxy (same-origin,
 // no CORS).  When opened as a local file the proxy isn't available so we
@@ -2655,32 +2666,38 @@ async function testConnection() {
     // Step 1 — validate token via /api/v1/self
     const selfResp = await mistFetch(`${baseUrl}/api/v1/self`, 'GET', apiToken);
 
-    if (!selfResp.ok) {
+    const selfData = await safeJson(selfResp);
+    if (!selfData.ok) {
       status.className = 'push-status error';
-      status.textContent = `✕ Token rejected (${selfResp.status}) — check your API token`;
+      status.textContent = selfData.json
+        ? `✕ Token rejected (${selfData.status}) — check your API token`
+        : `✕ Unexpected response (${selfData.status}) — ${selfData.text.slice(0, 120)}`;
       return;
     }
 
-    const self = await selfResp.json();
+    const self = selfData.json || {};
     const userName = self.name || self.email || 'Unknown user';
 
     // Step 2 — if org ID provided, confirm access to that org
     if (orgId) {
-      const orgResp = await mistFetch(`${baseUrl}/api/v1/orgs/${orgId}`, 'GET', apiToken);
+      const orgResp  = await mistFetch(`${baseUrl}/api/v1/orgs/${orgId}`, 'GET', apiToken);
+      const orgData  = await safeJson(orgResp);
 
-      if (orgResp.status === 404 || orgResp.status === 403) {
+      if (orgData.status === 404 || orgData.status === 403) {
         status.className = 'push-status error';
         status.textContent = `✕ Token is valid (${userName}) but cannot access org ${orgId} — check the Org ID`;
         return;
       }
 
-      if (!orgResp.ok) {
+      if (!orgData.ok) {
         status.className = 'push-status error';
-        status.textContent = `✕ Org check failed (${orgResp.status}) — token OK but org unreachable`;
+        status.textContent = orgData.json
+          ? `✕ Org check failed (${orgData.status}) — token OK but org unreachable`
+          : `✕ Unexpected response (${orgData.status}) — ${orgData.text.slice(0, 120)}`;
         return;
       }
 
-      const org = await orgResp.json();
+      const org = orgData.json || {};
       const orgName = org.name || orgId;
       status.className = 'push-status success';
       status.textContent = `✓ Connected as "${userName}" · Org: "${orgName}" · Ready to push`;
@@ -2729,15 +2746,29 @@ async function pushToMist() {
 
   try {
     const resp = await mistFetch(url, method, apiToken, currentTemplate);
-    const data = await resp.json();
-    if (!resp.ok) {
+    const { ok, status: httpStatus, json: data, text: rawText } = await safeJson(resp);
+
+    if (!ok) {
       status.className = 'push-status error';
-      status.textContent = `✕ ${resp.status}: ${JSON.stringify(data).slice(0, 200)}`;
+      // Show a meaningful message whether the body was JSON or raw HTML/text
+      const detail = data
+        ? JSON.stringify(data).slice(0, 200)
+        : rawText.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+      status.textContent = `✕ ${httpStatus}: ${detail}`;
+    } else if (!data) {
+      // HTTP 2xx but body isn't JSON — unexpected but not fatal
+      status.className = 'push-status error';
+      status.textContent = `✕ Unexpected non-JSON response (${httpStatus}). Push may have succeeded — check Mist UI.`;
     } else {
       status.className = 'push-status success';
       const tid = data.id || '?';
-      status.textContent = `✓ Created! Template ID: ${tid}`;
-      showToast(`Template created in Mist (${tid})`, '✓', true);
+      const verb = method === 'PUT' ? 'Updated' : 'Created';
+      status.textContent = `✓ ${verb}! Template ID: ${tid}`;
+      showToast(`Template ${verb.toLowerCase()} in Mist (${tid})`, '✓', true);
+      // Auto-fill template ID field for future updates
+      if (method === 'POST' && data.id) {
+        document.getElementById('templateId').value = data.id;
+      }
     }
   } catch (err) {
     status.className = 'push-status error';
