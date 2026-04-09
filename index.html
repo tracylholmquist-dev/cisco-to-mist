@@ -1129,10 +1129,10 @@ function buildPortUsages(ifaces, byId, vlans) {
   // with any other port that has the same VLAN/mode/auth config.
   function fingerprint(p) {
     return JSON.stringify([
-      p.mode || 'access',
+      p.allNetworks ? 'trunk' : (p.mode || 'access'),
       p.accessVlan,
       p.nativeVlan,
-      p.trunkVlans || '',
+      p.allNetworks ? 'all' : (p.trunkVlans || ''),
       p.voiceVlan,
       !!p.poeDisabled,
       !!p.stpEdge,
@@ -1140,7 +1140,8 @@ function buildPortUsages(ifaces, byId, vlans) {
       p.duplex || 'auto',
       p.portAuth || null,
       !!p.enableMacAuth,
-      !!p.disabled
+      !!p.disabled,
+      !!p.allNetworks
     ]);
   }
 
@@ -1155,10 +1156,11 @@ function buildPortUsages(ifaces, byId, vlans) {
 
     const hasConfig = props.mode || props.accessVlan !== undefined ||
                       props.trunkVlans || props.voiceVlan || props.portAuth ||
-                      props.disabled || props.aggregated;
+                      props.disabled || props.aggregated || props.allNetworks;
     if (!hasConfig) continue;
 
-    const mode = props.mode || 'access';
+    // allNetworks flag (Junos vlan members [all]) forces trunk mode
+    const mode = props.allNetworks ? 'trunk' : (props.mode || 'access');
     const fp   = fingerprint(props);
     const junos = ciscoToJunos(ifaceName);
 
@@ -1242,7 +1244,11 @@ function buildPortUsages(ifaces, byId, vlans) {
         if (props.voiceVlan)  pu.voip_network = vname(props.voiceVlan);
       } else if (mode === 'trunk') {
         if (props.nativeVlan) pu.port_network = vname(props.nativeVlan);
-        if (props.trunkVlans && props.trunkVlans.toLowerCase() !== 'all') {
+        if (props.allNetworks) {
+          // Junos vlan members [all] — carry all VLANs
+          pu.all_networks = true;
+          pu.networks     = null;
+        } else if (props.trunkVlans && props.trunkVlans.toLowerCase() !== 'all') {
           const ids  = expandVlanRange(props.trunkVlans);
           const nets = ids.map(v => vname(v)).filter(n => n in vlans);
           pu.networks     = nets.length ? nets : null;
@@ -1635,143 +1641,268 @@ function parseCiscoConfig(text) {
 function parseJunosSetStyle(text) {
   const lines = text.split('\n');
   const vlans = {}, byId = {}, ifaces = {}, localAccounts = {};
-  let loginBanner = '', hostname = '', domain = '';
+  let loginBanner = '', hostname = '', domain = '', rootPw = '';
   const ntpServers = [], dnsServers = [], radiusSrvs = [], tacacsSrvs = [];
   const snmpComm = [], snmpTraps = [];
   let snmpContact = '', snmpLocation = '';
   const syslogHosts = [];
   let stpModeStr = null, lldpEnabled = false;
 
+  // ── Groups, interface-ranges, and dot1x tracking ───────────
+  const groups      = {};   // groupName → { mode, vlans:[], nativeVlan, poeDisabled }
+  const ifaceRanges = {};   // rangeName → { members:[], groupNames:[] }
+  const directApply = {};   // ifaceName → [groupName, ...]
+  const dot1xRanges = new Set();
+
   function gi(name) {
     if (!ifaces[name]) ifaces[name] = { rawLines: [] };
     return ifaces[name];
   }
+  function getGroup(n) {
+    if (!groups[n]) groups[n] = { mode: null, vlans: [], nativeVlan: null };
+    return groups[n];
+  }
+  function getRange(n) {
+    if (!ifaceRanges[n]) ifaceRanges[n] = { members: [], groupNames: [] };
+    return ifaceRanges[n];
+  }
+  // Expand ge-0/0/[4-5] → [ge-0/0/4, ge-0/0/5]
+  function expandBrackets(iface) {
+    const m = iface.match(/^(.+)\[(\d+)-(\d+)\](.*)$/);
+    if (!m) return [iface];
+    const out = [];
+    for (let i = +m[2]; i <= +m[3]; i++) out.push(`${m[1]}${i}${m[4]}`);
+    return out;
+  }
 
   for (const line of lines) {
     const s = line.trim();
-    if (!s || s.startsWith('#')) continue;
+    // Skip blank, comments, delete/deactivate lines
+    if (!s || s.startsWith('#') || s.startsWith('delete ') || s.startsWith('deactivate ')) continue;
     let m;
 
-    // VLANs
+    // ── VLANs ──────────────────────────────────────────────────
     if ((m = s.match(/^set vlans (\S+) vlan-id (\d+)/))) {
       vlans[m[1]] = { vlan_id: +m[2], subnet: '' };
       byId[+m[2]] = m[1];
       continue;
     }
-    if ((m = s.match(/^set vlans (\S+) l3-interface (irb\.\d+)/))) continue; // skip L3
 
-    // Interfaces — description
+    // ── Groups: interface config ────────────────────────────────
+    if ((m = s.match(/^set groups (\S+) interfaces <\*> unit 0 family ethernet-switching interface-mode (\S+)/))) {
+      getGroup(m[1]).mode = m[2]; continue;
+    }
+    if ((m = s.match(/^set groups (\S+) interfaces <\*> unit 0 family ethernet-switching vlan members \[([^\]]+)\]/))) {
+      // Bracket list "[ A B C ]" — push all into vlans array (don't replace!)
+      getGroup(m[1]).vlans.push(...m[2].trim().split(/\s+/)); continue;
+    }
+    if ((m = s.match(/^set groups (\S+) interfaces <\*> unit 0 family ethernet-switching vlan members (\S+)/))) {
+      // Single member — accumulate across repeated lines
+      getGroup(m[1]).vlans.push(m[2]); continue;
+    }
+    if ((m = s.match(/^set groups (\S+) interfaces <\*> native-vlan-id (\d+)/))) {
+      getGroup(m[1]).nativeVlan = +m[2]; continue;
+    }
+
+    // ── Groups: system config (NTP, DNS, RADIUS, TACACS, Syslog) ─
+    if ((m = s.match(/^set groups \S+ system name-server (\S+)/)))
+      { if (!dnsServers.includes(m[1])) dnsServers.push(m[1]); continue; }
+    if ((m = s.match(/^set groups \S+ system ntp server (\S+)/)))
+      { if (!ntpServers.includes(m[1])) ntpServers.push(m[1]); continue; }
+    if ((m = s.match(/^set groups \S+ access radius-server (\S+) secret "?([^"\s]+)"?/)))
+      { radiusSrvs.push({ host: m[1], secret: m[2], port: 1812 }); continue; }
+    if ((m = s.match(/^set groups \S+ access tacplus-server (\S+) secret "?([^"\s]+)"?/)))
+      { tacacsSrvs.push({ host: m[1], secret: m[2], port: 49, timeout: 10 }); continue; }
+    if ((m = s.match(/^set groups \S+ system syslog host (\d[\d.]+)/)))
+      { if (!syslogHosts.includes(m[1])) syslogHosts.push(m[1]); continue; }
+
+    // ── Interface-range: members and apply-groups ───────────────
+    if ((m = s.match(/^set interfaces interface-range (\S+) description "?([^"]+)"?/))) {
+      getRange(m[1]).description = m[2].trim().replace(/^"|"$/g,''); continue;
+    }
+    if ((m = s.match(/^set interfaces interface-range (\S+) member (\S+)/))) {
+      getRange(m[1]).members.push(...expandBrackets(m[2])); continue;
+    }
+    if ((m = s.match(/^set interfaces interface-range (\S+) apply-groups (\S+)/))) {
+      getRange(m[1]).groupNames.push(m[2]); continue;
+    }
+
+    // ── Direct apply-groups on a named interface (e.g. ae6) ────
+    if ((m = s.match(/^set interfaces ([\w/-]+) apply-groups (\S+)/))) {
+      if (!directApply[m[1]]) directApply[m[1]] = [];
+      directApply[m[1]].push(m[2]);
+      continue;
+    }
+
+    // ── dot1x protocol range assignment ────────────────────────
+    if ((m = s.match(/^set protocols dot1x authenticator interface (\S+)/))) {
+      dot1xRanges.add(m[1]); continue;
+    }
+
+    // ── Direct interface config ─────────────────────────────────
     if ((m = s.match(/^set interfaces ([\w/-]+) description "?([^"]+)"?/))) {
-      gi(m[1]).description = m[2].trim().replace(/^"|"$/g,'');
-      continue;
+      gi(m[1]).description = m[2].trim().replace(/^"|"$/g,''); continue;
     }
-    // Interface mode
     if ((m = s.match(/^set interfaces ([\w/-]+) unit 0 family ethernet-switching interface-mode (\S+)/))) {
-      gi(m[1]).mode = m[2];
-      continue;
+      gi(m[1]).mode = m[2]; continue;
     }
-    // VLAN members — bracketed list [V1 V2]
     if ((m = s.match(/^set interfaces ([\w/-]+) unit 0 family ethernet-switching vlan members \[([^\]]+)\]/))) {
-      const names = m[2].trim().split(/\s+/);
-      gi(m[1]).junosTrunkVlans = (gi(m[1]).junosTrunkVlans || []).concat(names);
-      continue;
+      gi(m[1]).junosTrunkVlans = (gi(m[1]).junosTrunkVlans || []).concat(m[2].trim().split(/\s+/)); continue;
     }
-    // VLAN members — single
     if ((m = s.match(/^set interfaces ([\w/-]+) unit 0 family ethernet-switching vlan members (\S+)/))) {
-      gi(m[1]).junosTrunkVlans = (gi(m[1]).junosTrunkVlans || []).concat([m[2]]);
-      continue;
+      gi(m[1]).junosTrunkVlans = (gi(m[1]).junosTrunkVlans || []).concat([m[2]]); continue;
     }
-    // Native VLAN
     if ((m = s.match(/^set interfaces ([\w/-]+) unit 0 family ethernet-switching native-vlan-id (\d+)/))) {
-      gi(m[1]).nativeVlan = +m[2];
-      continue;
+      gi(m[1]).nativeVlan = +m[2]; continue;
     }
-    // Disabled
     if ((m = s.match(/^set interfaces ([\w/-]+) disable$/))) {
-      gi(m[1]).disabled = true;
-      continue;
+      gi(m[1]).disabled = true; continue;
     }
-    // LAG member
     if ((m = s.match(/^set interfaces ([\w/-]+) ether-options 802\.3ad (ae\d+)/))) {
       gi(m[1]).aggregated = true;
       gi(m[1]).aeIdx = parseInt(m[2].replace('ae',''), 10);
       gi(m[1]).aeDisableLacp = false;
       continue;
     }
-    // PoE disable
-    if ((m = s.match(/^set poe interface ([\w/-]+) disable/))) {
-      gi(m[1]).poeDisabled = true;
-      continue;
-    }
-    // STP edge
-    if ((m = s.match(/^set protocols rstp interface ([\w/-]+) (edge|no-root-port)/))) {
-      if (m[2] === 'edge') gi(m[1]).stpEdge = true;
-      continue;
-    }
-    // Speed
     if ((m = s.match(/^set interfaces ([\w/-]+) ether-options speed (\S+)/))) {
-      gi(m[1]).speed = m[2].replace(/g$/, '000').replace(/m$/, '');
+      gi(m[1]).speed = m[2].replace(/g$/, '000').replace(/m$/, ''); continue;
+    }
+    if ((m = s.match(/^set protocols rstp interface ([\w/-]+) edge/))) {
+      gi(m[1]).stpEdge = true; continue;
+    }
+
+    // ── PoE — works on both direct interface names and range names ─
+    if ((m = s.match(/^set poe interface (\S+) disable/))) {
+      const t = m[1];
+      if (ifaceRanges[t]) { for (const mb of ifaceRanges[t].members) gi(mb).poeDisabled = true; }
+      else gi(t).poeDisabled = true;
       continue;
     }
 
-    // System
-    if ((m = s.match(/^set system host-name (\S+)/)))    { hostname = m[1]; continue; }
-    if ((m = s.match(/^set system domain-name (\S+)/)))  { domain   = m[1]; continue; }
-    if ((m = s.match(/^set system ntp server (\S+)/)))   { ntpServers.push(m[1]); continue; }
-    if ((m = s.match(/^set system name-server (\S+)/)))  { dnsServers.push(m[1]); continue; }
+    // ── System ─────────────────────────────────────────────────
+    if ((m = s.match(/^set system host-name (\S+)/)))   { hostname = m[1]; continue; }
+    if ((m = s.match(/^set system domain-name (\S+)/))) { domain   = m[1]; continue; }
+    if ((m = s.match(/^set system ntp server (\S+)/)))  { if (!ntpServers.includes(m[1])) ntpServers.push(m[1]); continue; }
+    if ((m = s.match(/^set system name-server (\S+)/))) { if (!dnsServers.includes(m[1])) dnsServers.push(m[1]); continue; }
+    if ((m = s.match(/^set system root-authentication encrypted-password "?([^"\s]+)"?/)))
+      { rootPw = m[1]; continue; }
 
-    // Login users
+    // ── Login users ─────────────────────────────────────────────
     if ((m = s.match(/^set system login user (\S+) class (\S+)/))) {
       if (!localAccounts[m[1]]) localAccounts[m[1]] = { role: 'read', password: '' };
       localAccounts[m[1]].role = m[2] === 'super-user' ? 'super' : m[2] === 'operator' ? 'operator' : 'read';
       continue;
     }
-    if ((m = s.match(/^set system login user (\S+) authentication (?:encrypted-password|plain-text-password) "?([^"\s]+)"?/))) {
+    if ((m = s.match(/^set system login user (\S+) authentication encrypted-password "?([^"\s]+)"?/))) {
       if (!localAccounts[m[1]]) localAccounts[m[1]] = { role: 'read', password: '' };
       localAccounts[m[1]].password = m[2];
       continue;
     }
     if ((m = s.match(/^set system login message "?(.+)"?/))) {
-      loginBanner = m[1].replace(/^"|"$/g, '');
-      continue;
+      loginBanner = m[1].replace(/^"|"$/g, ''); continue;
     }
 
-    // RADIUS
+    // ── RADIUS / TACACS ────────────────────────────────────────
     if ((m = s.match(/^set system radius-server (\S+) secret "?([^"\s]+)"?/)))
       { radiusSrvs.push({ host: m[1], secret: m[2], port: 1812 }); continue; }
-
-    // TACACS
     if ((m = s.match(/^set system tacplus-server (\S+) secret "?([^"\s]+)"?/)))
       { tacacsSrvs.push({ host: m[1], secret: m[2], port: 49, timeout: 10 }); continue; }
 
-    // SNMP
+    // ── SNMP ────────────────────────────────────────────────────
     if ((m = s.match(/^set snmp community (\S+) authorization/)))
       { snmpComm.push({ community: m[1], view: 'all' }); continue; }
-    if ((m = s.match(/^set snmp contact "?([^"]+)"?/)))    { snmpContact  = m[1]; continue; }
-    if ((m = s.match(/^set snmp location "?([^"]+)"?/)))   { snmpLocation = m[1]; continue; }
+    if ((m = s.match(/^set snmp contact "?([^"]+)"?/)))   { snmpContact  = m[1]; continue; }
+    if ((m = s.match(/^set snmp location "?([^"]+)"?/)))  { snmpLocation = m[1]; continue; }
     if ((m = s.match(/^set snmp trap-group \S+ targets (\S+)/)))
       { snmpTraps.push({ ip: m[1] }); continue; }
 
-    // Syslog
-    if ((m = s.match(/^set system syslog host (\S+)/)))    { syslogHosts.push(m[1]); continue; }
+    // ── Syslog ──────────────────────────────────────────────────
+    if ((m = s.match(/^set system syslog host (\d[\d.]+)/)))
+      { if (!syslogHosts.includes(m[1])) syslogHosts.push(m[1]); continue; }
 
-    // STP / LLDP
-    if (/^set protocols rstp$/.test(s))                    { stpModeStr = 'rstp'; continue; }
-    if (/^set protocols mstp/.test(s))                     { stpModeStr = 'mstp'; continue; }
-    if (/^set protocols lldp/.test(s))                     { lldpEnabled = true; continue; }
+    // ── STP / LLDP ──────────────────────────────────────────────
+    if (/^set protocols rstp(\s|$)/.test(s))  { stpModeStr = 'rstp'; }
+    if (/^set protocols mstp/.test(s))        { stpModeStr = 'mstp'; }
+    if (/^set protocols lldp/.test(s))        { lldpEnabled = true; }
   }
 
-  // Resolve VLAN names → IDs on interface props
+  // ── POST-PROCESSING ─────────────────────────────────────────
+
+  // 1. Apply interface-range group configs to their members
+  for (const [rangeName, range] of Object.entries(ifaceRanges)) {
+    const isApRange = /^mist.?ap|^ap/i.test(rangeName);
+    for (const member of range.members) {
+      const props = gi(member);
+      // AP ranges: force "AP" description so buildPortUsages routes to Mist-APs profile.
+      // Non-AP ranges: propagate range description for better profile naming.
+      if (isApRange) {
+        if (!props.description) props.description = 'AP';
+      } else if (range.description && !props.description) {
+        props.description = range.description;
+      }
+      for (const groupName of range.groupNames) {
+        const grp = groups[groupName];
+        if (!grp) continue;
+        if (grp.mode)        props.mode = grp.mode;
+        if (grp.nativeVlan)  props.nativeVlan = grp.nativeVlan;
+        if (grp.vlans && grp.vlans.length) {
+          if (grp.vlans.includes('all')) {
+            props.allNetworks = true;
+            props.mode = props.mode || 'trunk';
+          } else {
+            props.junosTrunkVlans = (props.junosTrunkVlans || []).concat(grp.vlans);
+          }
+        }
+      }
+    }
+  }
+
+  // 2. Apply direct ae interface groups to their LAG member ports
+  const aeGroupMap = {};
+  for (const [ifName, gNames] of Object.entries(directApply)) {
+    const m2 = ifName.match(/^ae(\d+)$/i);
+    if (m2) {
+      for (const gn of gNames) { if (groups[gn]) aeGroupMap[+m2[1]] = groups[gn]; }
+    }
+  }
+  for (const props of Object.values(ifaces)) {
+    if (props.aggregated && props.aeIdx !== undefined) {
+      const grp = aeGroupMap[props.aeIdx];
+      if (!grp) continue;
+      if (grp.mode && !props.mode)           props.mode = grp.mode;
+      if (grp.nativeVlan && !props.nativeVlan) props.nativeVlan = grp.nativeVlan;
+      if (grp.vlans && grp.vlans.length && !props.junosTrunkVlans) {
+        if (grp.vlans.includes('all')) { props.allNetworks = true; }
+        else                          { props.junosTrunkVlans = grp.vlans; }
+      }
+    }
+  }
+
+  // 3. Apply dot1x auth to range members
+  for (const rangeName of dot1xRanges) {
+    if (ifaceRanges[rangeName]) {
+      for (const member of ifaceRanges[rangeName].members) gi(member).portAuth = 'dot1x';
+    }
+  }
+
+  // 4. Resolve VLAN names → IDs
   for (const props of Object.values(ifaces)) {
     if (!props.junosTrunkVlans) continue;
     const mode = props.mode || 'access';
-    if (mode === 'access' && props.junosTrunkVlans.length) {
-      const vn = props.junosTrunkVlans[0];
-      const vid = vlans[vn]?.vlan_id;
+    if (mode === 'access' && props.junosTrunkVlans.length === 1) {
+      // Single VLAN on access port → data/access VLAN
+      const vid = vlans[props.junosTrunkVlans[0]]?.vlan_id;
       if (vid) props.accessVlan = vid;
+    } else if (mode === 'access' && props.junosTrunkVlans.length === 2) {
+      // Two VLANs on access port → Junos voice port (data + voice VLAN)
+      const vid1 = vlans[props.junosTrunkVlans[0]]?.vlan_id;
+      const vid2 = vlans[props.junosTrunkVlans[1]]?.vlan_id;
+      if (vid1) props.accessVlan = vid1;
+      if (vid2) props.voiceVlan  = vid2;
     } else {
-      const ids = props.junosTrunkVlans
-        .map(vn => vlans[vn]?.vlan_id).filter(Boolean);
+      // Trunk with explicit VLAN list
+      props.mode = props.mode || 'trunk';
+      const ids = props.junosTrunkVlans.map(vn => vlans[vn]?.vlan_id).filter(Boolean);
       if (ids.length) props.trunkVlans = ids.join(',');
     }
     delete props.junosTrunkVlans;
@@ -1781,6 +1912,7 @@ function parseJunosSetStyle(text) {
 
   return {
     vlans, byId, ifaces, localAccounts, loginBanner,
+    rootPw,
     radiusConfig  : buildMistRadius(radiusSrvs),
     tacacsConfig  : buildMistTacacs(tacacsSrvs),
     snmpConfig    : buildMistSnmp(snmpComm, snmpContact, snmpLocation, snmpTraps),
@@ -2041,6 +2173,7 @@ function convert(configText, templateName, rootPassword = '') {
     ntpServers, dnsServers, dnsSuffix,
     syslog, dhcpSnooping,
     hostname, stpModeStr, lldpEnabled, hasDot1x, addlCmds,
+    rootPw,   // Junos: parsed from set system root-authentication encrypted-password
   } = parsed;
 
   const { portUsages, portConfigMap, portTableRows, warnings } = buildPortUsages(ifaces, byId, vlans);
@@ -2107,7 +2240,7 @@ function convert(configText, templateName, rootPassword = '') {
       dhcp_option_fqdn: false,
       local_accounts: localAccounts,
       protect_re: { enabled: true },
-      root_password: rootPassword || '',
+      root_password: rootPassword || rootPw || '',
       tacacs: tacacsConfig,
       ...(loginBanner ? { banner: loginBanner } : {})
     },
