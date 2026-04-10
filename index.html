@@ -1504,18 +1504,15 @@ function parseSnmp(lines) {
   for (const line of lines) {
     const s = line.trim();
     let m;
-    if ((m = s.match(/^snmp-server community\s+(\S+)\s+(RO|RW)/i)))
+    if ((m = s.match(/^snmp-server community\s+(\S+)\s*(RO|RW)?/i)))
       v2c.push({ community: m[1], view: 'all' });
     if ((m = s.match(/^snmp-server contact\s+(.*)/)))  contact  = m[1].trim();
     if ((m = s.match(/^snmp-server location\s+(.*)/))) location = m[1].trim().replace(/^"|"$/g,'');
     if ((m = s.match(/^snmp-server host\s+(\S+)\s+(?:version\s+\S+\s+)?(\S+)/)))
       trapHosts.push({ ip: m[1], community: m[2] });
   }
-  if (!v2c.length) return { enabled: false };
-  const cfg = { enabled: true, contact, location, v2c_config: v2c };
-  if (trapHosts.length)
-    cfg.trap_groups = [{ name: 'default', targets: trapHosts.map(t => t.ip), version: 'v2' }];
-  return cfg;
+  // Delegate to the shared builder so views are always defined alongside communities
+  return buildMistSnmp(v2c, contact, location, trapHosts);
 }
 
 // ── NTP / DNS / Syslog / DHCP snooping ────────────────────────
