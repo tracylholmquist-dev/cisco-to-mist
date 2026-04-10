@@ -1601,9 +1601,28 @@ function buildMistTacacs(servers) {
 
 function buildMistSnmp(communities, contact, location, trapHosts) {
   if (!communities.length) return { enabled: false };
-  const cfg = { enabled: true, contact: contact || '', location: location || '', v2c_config: communities };
+
+  // Collect every unique view name referenced by communities.
+  // Mist rejects the config if a community references a view that isn't
+  // defined in the top-level `views` array ("view X does not exist in SNMP views").
+  const viewNames = [...new Set(communities.map(c => c.view).filter(Boolean))];
+  const views = viewNames.map(name => ({
+    name,
+    // OID "1" with included:true covers the entire MIB tree (equivalent to "all")
+    include: [{ oid: '1', included: true }]
+  }));
+
+  const cfg = {
+    enabled:    true,
+    contact:    contact  || '',
+    location:   location || '',
+    views,
+    v2c_config: communities,
+  };
+
   if (trapHosts && trapHosts.length)
     cfg.trap_groups = [{ name: 'default', targets: trapHosts.map(t => t.ip), version: 'v2' }];
+
   return cfg;
 }
 
