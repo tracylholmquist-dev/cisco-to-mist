@@ -1596,25 +1596,55 @@ function buildMistTacacs(servers) {
   return { enabled: true, servers, tacplus_servers: servers, default_role: 'admin' };
 }
 
+// ── OSPF builder ───────────────────────────────────────────────
+// Converts Junos ospfAreas dict → Mist ospf_config object.
+// IRB interfaces are resolved to VLAN names via byId.
+// Loopback (lo0) and management (fxp/em) interfaces are skipped.
+function buildMistOspf(ospfAreas, byId) {
+  if (!Object.keys(ospfAreas).length) return null;
+
+  const areas = Object.entries(ospfAreas).map(([areaId, ifaces]) => {
+    const networks = [];
+    for (const [ifName, opts] of Object.entries(ifaces)) {
+      // Skip loopback — passive lo0.0 is internal bookkeeping, not a routed network
+      if (/^lo\d/i.test(ifName)) continue;
+
+      let network;
+      const irbM = ifName.match(/^irb\.(\d+)/i);
+      if (irbM) {
+        // IRB interface → resolve VLAN name from VLAN ID
+        const vid = parseInt(irbM[1], 10);
+        network = byId[vid] || `vlan${vid}`;
+      } else {
+        // Physical / LAG uplink (ae0.0, ge-1/0/39.0 …) — strip unit suffix
+        network = ifName.replace(/\.\d+$/, '');
+      }
+
+      const entry = { network, passive: !!opts.passive };
+      if (opts.ifaceType) entry.interface_type = opts.ifaceType;
+      networks.push(entry);
+    }
+    return { area_id: areaId, networks };
+  }).filter(a => a.networks.length > 0);
+
+  if (!areas.length) return null;
+  return { enabled: true, areas };
+}
+
 function buildMistSnmp(communities, contact, location, trapHosts) {
   if (!communities.length) return { enabled: false };
 
-  // Collect every unique view name referenced by communities.
-  // Mist rejects the config if a community references a view that isn't
-  // defined in the top-level `views` array ("view X does not exist in SNMP views").
-  const viewNames = [...new Set(communities.map(c => c.view).filter(Boolean))];
-  const views = viewNames.map(name => ({
-    name,
-    // OID "1" with included:true covers the entire MIB tree (equivalent to "all")
-    include: [{ oid: '1', included: true }]
-  }));
+  // Mist rejects communities that reference a view name not defined in the
+  // top-level views array.  Rather than guess the correct view schema, strip
+  // the view field entirely — Mist treats communities with no view as
+  // unrestricted (all OIDs), which is the correct behaviour for a migrated config.
+  const v2c = communities.map(({ community }) => ({ community }));
 
   const cfg = {
     enabled:    true,
     contact:    contact  || '',
     location:   location || '',
-    views,
-    v2c_config: communities,
+    v2c_config: v2c,
   };
 
   if (trapHosts && trapHosts.length)
@@ -1669,6 +1699,10 @@ function parseJunosSetStyle(text) {
   const ifaceRanges = {};   // rangeName → { members:[], groupNames:[] }
   const directApply = {};   // ifaceName → [groupName, ...]
   const dot1xRanges = new Set();
+
+  // ── Routing ─────────────────────────────────────────────────
+  const staticRoutes = {};  // prefix → { via }
+  const ospfAreas    = {};  // areaId → { ifaceName → { passive, ifaceType } }
 
   function gi(name) {
     if (!ifaces[name]) ifaces[name] = { rawLines: [] };
@@ -1840,6 +1874,23 @@ function parseJunosSetStyle(text) {
     if (/^set protocols rstp(\s|$)/.test(s))  { stpModeStr = 'rstp'; }
     if (/^set protocols mstp/.test(s))        { stpModeStr = 'mstp'; }
     if (/^set protocols lldp/.test(s))        { lldpEnabled = true; }
+
+    // ── Static routes ────────────────────────────────────────────
+    if ((m = s.match(/^set routing-options static route (\S+) next-hop (\S+)/)))
+      { staticRoutes[m[1]] = { via: m[2] }; continue; }
+
+    // ── OSPF ─────────────────────────────────────────────────────
+    if ((m = s.match(/^set protocols ospf area (\S+) interface (\S+)(.*)/))) {
+      const areaId  = m[1];
+      const ifName  = m[2];
+      const rest    = m[3];
+      if (!ospfAreas[areaId]) ospfAreas[areaId] = {};
+      ospfAreas[areaId][ifName] = {
+        passive     : /\bpassive\b/.test(rest),
+        ifaceType   : (rest.match(/interface-type\s+(\S+)/) || [])[1] || null,
+      };
+      continue;
+    }
   }
 
   // ── POST-PROCESSING ─────────────────────────────────────────
@@ -1939,6 +1990,8 @@ function parseJunosSetStyle(text) {
     dhcpSnooping  : { enabled: true, all_networks: true, enable_arp_spoof_check: false, enable_ip_source_guard: false },
     hostname, stpModeStr, lldpEnabled, hasDot1x: false,
     addlCmds      : hostname ? [`# Original hostname: ${hostname}`] : [],
+    staticRoutes,
+    ospfAreas,
   };
 }
 
@@ -2189,7 +2242,9 @@ function convert(configText, templateName, rootPassword = '') {
     ntpServers, dnsServers, dnsSuffix,
     syslog, dhcpSnooping,
     hostname, stpModeStr, lldpEnabled, hasDot1x, addlCmds,
-    rootPw,   // Junos: parsed from set system root-authentication encrypted-password
+    rootPw,        // Junos: parsed from set system root-authentication encrypted-password
+    staticRoutes,  // Junos: set routing-options static route …
+    ospfAreas,     // Junos: set protocols ospf area … interface …
   } = parsed;
 
   const { portUsages, portConfigMap, portTableRows, warnings } = buildPortUsages(ifaces, byId, vlans);
@@ -2264,9 +2319,12 @@ function convert(configText, templateName, rootPassword = '') {
       mode: mistStpMode
     },
     vrf_config: { enabled: false },
-    extra_routes: {},
+    extra_routes:  staticRoutes && Object.keys(staticRoutes).length  ? staticRoutes  : {},
     extra_routes6: {},
     routing_policies: {},
+    ...(ospfAreas && Object.keys(ospfAreas).length
+        ? { ospf_config: buildMistOspf(ospfAreas, byId) }
+        : {}),
     port_mirroring: {},
     bgp_config: null,
     additional_config_cmds: addlCmds,
