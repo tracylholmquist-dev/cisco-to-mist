@@ -1733,8 +1733,14 @@ function parseJunosSetStyle(text) {
 
     // ── VLANs ──────────────────────────────────────────────────
     if ((m = s.match(/^set vlans (\S+) vlan-id (\d+)/))) {
-      vlans[m[1]] = { vlan_id: +m[2], subnet: '' };
+      if (!vlans[m[1]]) vlans[m[1]] = { vlan_id: +m[2], subnet: '' };
+      else vlans[m[1]].vlan_id = +m[2];
       byId[+m[2]] = m[1];
+      continue;
+    }
+    if ((m = s.match(/^set vlans (\S+) description (\S+)/))) {
+      if (!vlans[m[1]]) vlans[m[1]] = { vlan_id: 0, subnet: '' };
+      vlans[m[1]].description = m[2];
       continue;
     }
 
@@ -1789,9 +1795,20 @@ function parseJunosSetStyle(text) {
       dot1xRanges.add(m[1]); continue;
     }
 
+    // ── Voice VLAN via switch-options voip ──────────────────────────
+    // Junos EX assigns voice VLANs here rather than directly on the interface.
+    // Strip optional trailing unit suffix (.0) to get the plain interface name.
+    if ((m = s.match(/^set switch-options voip interface ([\w/-]+?)(?:\.\d+)? vlan (\S+)/))) {
+      gi(m[1]).junosVoiceVlan = m[2]; continue;
+    }
+
     // ── Direct interface config ─────────────────────────────────
     if ((m = s.match(/^set interfaces ([\w/-]+) description "?([^"]+)"?/))) {
       gi(m[1]).description = m[2].trim().replace(/^"|"$/g,''); continue;
+    }
+    // Top-level native-vlan-id (no "unit 0 family ethernet-switching" qualifier)
+    if ((m = s.match(/^set interfaces ([\w/-]+) native-vlan-id (\d+)/))) {
+      gi(m[1]).nativeVlan = +m[2]; continue;
     }
     if ((m = s.match(/^set interfaces ([\w/-]+) unit 0 family ethernet-switching interface-mode (\S+)/))) {
       gi(m[1]).mode = m[2]; continue;
@@ -1973,6 +1990,14 @@ function parseJunosSetStyle(text) {
       if (ids.length) props.trunkVlans = ids.join(',');
     }
     delete props.junosTrunkVlans;
+  }
+
+  // 5. Resolve switch-options voip VLAN names → voice VLAN IDs
+  for (const props of Object.values(ifaces)) {
+    if (!props.junosVoiceVlan) continue;
+    const vid = vlans[props.junosVoiceVlan]?.vlan_id;
+    if (vid) props.voiceVlan = vid;
+    delete props.junosVoiceVlan;
   }
 
   delete vlans['default']; delete byId[1];
