@@ -2422,9 +2422,21 @@ function convert(configText, templateName, rootPassword = '') {
     fast_dot1x_timers: false
   } : undefined;
 
+  // Strip internal-only fields (description, etc.) from vlans before building the
+  // template — Mist's network schema only accepts vlan_id, subnet, subnet6, gateway.
+  // Unknown fields can cause silent partial-rejection of the template payload.
+  const mistNetworks = {};
+  for (const [name, v] of Object.entries(vlans)) {
+    const entry = { vlan_id: v.vlan_id };
+    if (v.subnet)  entry.subnet  = v.subnet;
+    if (v.subnet6) entry.subnet6 = v.subnet6;
+    if (v.gateway) entry.gateway = v.gateway;
+    mistNetworks[name] = entry;
+  }
+
   const template = {
     name: templateName,
-    networks: vlans,
+    networks: mistNetworks,
     port_usages: portUsages,
     radius_config: radiusConfig,
     snmp_config: snmpConfig,
@@ -2694,6 +2706,19 @@ function renderSummary(template, stats) {
     .map(([n, v]) => `<li><strong>${n}</strong> — VLAN ${v.vlan_id}${v.subnet ? ' · ' + v.subnet : ''}</li>`)
     .join('');
 
+  // OSPF summary
+  const ospf = template.ospf_config;
+  let ospfHtml = '<li style="color:var(--text-dimmer)">Not configured</li>';
+  if (ospf && ospf.enabled && ospf.areas) {
+    const areaItems = Object.entries(ospf.areas).map(([areaId, area]) => {
+      const nets = Object.entries(area.networks || {})
+        .map(([net, cfg]) => `${net}${cfg.passive ? ' <span style="color:var(--text-dimmer)">(passive)</span>' : ''}`)
+        .join(', ');
+      return `<li><strong>Area ${areaId}</strong> (${area.type || 'default'}) — ${nets || 'no networks'}</li>`;
+    });
+    ospfHtml = areaItems.join('');
+  }
+
   const puHtml = Object.entries(template.port_usages)
     .map(([n, pu]) => `<li><strong>${n}</strong> — ${pu.mode}${pu.port_network !== 'default' ? ' · VLAN: ' + pu.port_network : ''}${pu.voip_network ? ' · Voice: ' + pu.voip_network : ''}${pu.port_auth ? ' · 🔐 dot1x' : ''}${pu.poe_disabled ? ' · PoE off' : ''}</li>`)
     .join('');
@@ -2745,6 +2770,18 @@ function renderSummary(template, stats) {
           <li><strong>Root Password:</strong> ${template.switch_mgmt.root_password ? '✓ Set' : '<span style="color:var(--text-dimmer)">Not set</span>'}</li>
           <li><strong>Login Banner:</strong> ${template.switch_mgmt.banner ? `✓ Migrated (${template.switch_mgmt.banner.length} chars)` : '<span style="color:var(--text-dimmer)">None found in config</span>'}</li>
         </ul>
+      </section>
+      <section>
+        <h3 style="font-size:12px;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-dim);margin-bottom:8px">OSPF Configuration</h3>
+        <ul style="list-style:none;display:flex;flex-direction:column;gap:4px;font-size:12px">${ospfHtml}</ul>
+      </section>
+      <section>
+        <h3 style="font-size:12px;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-dim);margin-bottom:8px">Static Routes (extra_routes)</h3>
+        <ul style="list-style:none;display:flex;flex-direction:column;gap:4px;font-size:12px">${
+          Object.keys(template.extra_routes || {}).length
+            ? Object.entries(template.extra_routes).map(([pfx, r]) => `<li><strong>${pfx}</strong> via ${r.via}</li>`).join('')
+            : '<li style="color:var(--text-dimmer)">None</li>'
+        }</ul>
       </section>
       <section>
         <h3 style="font-size:12px;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-dim);margin-bottom:8px">API Reference</h3>
