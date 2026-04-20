@@ -1752,6 +1752,9 @@ function parseJunosSetStyle(text) {
   const staticRoutes = {};  // prefix → { via }
   const ospfAreas    = {};  // areaId → { ifaceName → { passive, ifaceType } }
 
+  // IRB/VLAN subnets collected by VLAN ID during parse, resolved to names after
+  const irbSubnets   = {};  // vlanId → { subnet?, subnet6? }
+
   function gi(name) {
     if (!ifaces[name]) ifaces[name] = { rawLines: [] };
     return ifaces[name];
@@ -1792,32 +1795,34 @@ function parseJunosSetStyle(text) {
       continue;
     }
 
-    // ── IRB interfaces → subnets for L3 VLANs ──────────────────
+    // ── IRB / VLAN interfaces → collect subnets by VLAN ID ──────
+    // Resolved to VLAN names in post-processing (VLANs may not be defined yet
+    // when these lines appear early in the config).
     // set interfaces irb unit X family inet address A.B.C.D/prefix
     if ((m = s.match(/^set interfaces irb unit (\d+) family inet address (\d+\.\d+\.\d+\.\d+\/\d+)/))) {
-      const vid  = parseInt(m[1], 10);
-      const name = byId[vid];
-      if (name && vlans[name]) vlans[name].subnet = networkFromCidr(m[2]);
+      const vid = parseInt(m[1], 10);
+      if (!irbSubnets[vid]) irbSubnets[vid] = {};
+      irbSubnets[vid].subnet = networkFromCidr(m[2]);
       continue;
     }
     // set interfaces irb unit X family inet6 address X::1/prefix
     if ((m = s.match(/^set interfaces irb unit (\d+) family inet6 address ([0-9a-fA-F:]+\/\d+)/))) {
-      const vid  = parseInt(m[1], 10);
-      const name = byId[vid];
-      if (name && vlans[name]) vlans[name].subnet6 = m[2];
+      const vid = parseInt(m[1], 10);
+      if (!irbSubnets[vid]) irbSubnets[vid] = {};
+      irbSubnets[vid].subnet6 = m[2];
       continue;
     }
     // set interfaces vlan unit X family inet address A.B.C.D/prefix (some EX models)
     if ((m = s.match(/^set interfaces vlan unit (\d+) family inet address (\d+\.\d+\.\d+\.\d+\/\d+)/))) {
-      const vid  = parseInt(m[1], 10);
-      const name = byId[vid];
-      if (name && vlans[name]) vlans[name].subnet = networkFromCidr(m[2]);
+      const vid = parseInt(m[1], 10);
+      if (!irbSubnets[vid]) irbSubnets[vid] = {};
+      irbSubnets[vid].subnet = networkFromCidr(m[2]);
       continue;
     }
     if ((m = s.match(/^set interfaces vlan unit (\d+) family inet6 address ([0-9a-fA-F:]+\/\d+)/))) {
-      const vid  = parseInt(m[1], 10);
-      const name = byId[vid];
-      if (name && vlans[name]) vlans[name].subnet6 = m[2];
+      const vid = parseInt(m[1], 10);
+      if (!irbSubnets[vid]) irbSubnets[vid] = {};
+      irbSubnets[vid].subnet6 = m[2];
       continue;
     }
 
@@ -2075,6 +2080,15 @@ function parseJunosSetStyle(text) {
     const vid = vlans[props.junosVoiceVlan]?.vlan_id;
     if (vid) props.voiceVlan = vid;
     delete props.junosVoiceVlan;
+  }
+
+  // 6. Resolve IRB/VLAN subnets (collected by VLAN ID) → vlans map
+  // Must run after the main loop so all VLAN definitions are present in byId.
+  for (const [vidStr, addrs] of Object.entries(irbSubnets)) {
+    const name = byId[parseInt(vidStr, 10)];
+    if (!name || !vlans[name]) continue;
+    if (addrs.subnet)  vlans[name].subnet  = addrs.subnet;
+    if (addrs.subnet6) vlans[name].subnet6 = addrs.subnet6;
   }
 
   delete vlans['default']; delete byId[1];
