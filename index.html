@@ -1622,61 +1622,85 @@ function buildMistTacacs(servers) {
 }
 
 // ── OSPF builder ───────────────────────────────────────────────
-// Converts Junos ospfAreas dict → Mist ospf_config object.
-// Mist uses object maps (not arrays) for both areas and networks:
-//   ospf_config.areas  = { "0.0.0.0": { type, networks: { VLAN: { passive, ... } } } }
-// IRB interfaces are resolved to VLAN names via byId.
-// Only networks that exist in the vlans map are included — physical
-// interface names (ge-0/0/48, ae0, etc.) are NOT valid Mist network keys
-// and would cause Mist to reject the ospf_config block.
-// Loopback (lo0) and management (fxp/em) interfaces are always skipped.
-function buildMistOspf(ospfAreas, byId, vlans) {
-  if (!Object.keys(ospfAreas).length) return null;
+// Mist requires TWO separate fields:
+//   ospf_config  — areas keyed by dotted notation ("0.0.0.0"), all networks include interface_type
+//   ospf_areas   — areas keyed by decimal number ("0"),        passive networks omit interface_type,
+//                  each area has include_loopback: false
+//
+// Convert dotted-notation area ID to decimal number string ("0.0.0.0" → "0")
+function areaIdToDecimal(dotted) {
+  const parts = dotted.split('.').map(Number);
+  if (parts.length !== 4 || parts.some(isNaN)) return dotted;
+  const num = (parts[0] << 24 | parts[1] << 16 | parts[2] << 8 | parts[3]) >>> 0;
+  return String(num);
+}
 
-  const areasMap = {};
+// Build the shared networks map for one area.
+// Returns null if no valid networks found.
+function buildOspfNetworks(ifaces, byId, vlans) {
+  const networksMap = {};
+  for (const [ifName, opts] of Object.entries(ifaces)) {
+    if (/^lo\d/i.test(ifName)) continue;               // skip loopback
+    if (/^(fxp|em|me|oob|mgmt)/i.test(ifName)) continue; // skip mgmt
+
+    let networkKey;
+    const irbM = ifName.match(/^irb\.(\d+)/i);
+    if (irbM) {
+      const vid = parseInt(irbM[1], 10);
+      networkKey = byId[vid] || `vlan${vid}`;
+    } else {
+      networkKey = ifName.replace(/\.\d+$/, '');
+    }
+
+    // Only include networks that exist in the Mist networks map
+    if (vlans && !vlans[networkKey]) continue;
+
+    networksMap[networkKey] = { passive: !!opts.passive, ifaceType: opts.ifaceType || null };
+  }
+  return Object.keys(networksMap).length ? networksMap : null;
+}
+
+function buildMistOspf(ospfAreas, byId, vlans) {
+  if (!Object.keys(ospfAreas).length) return { ospfConfig: null, ospfAreas: null };
+
+  const configAreasMap = {};   // keyed by "0.0.0.0" — for ospf_config
+  const areasMap       = {};   // keyed by "0"       — for ospf_areas
 
   for (const [areaId, ifaces] of Object.entries(ospfAreas)) {
-    const networksMap = {};
+    const networks = buildOspfNetworks(ifaces, byId, vlans);
+    if (!networks) continue;
 
-    for (const [ifName, opts] of Object.entries(ifaces)) {
-      // Skip loopback — lo0.0 is internal bookkeeping, not a routed L3 network
-      if (/^lo\d/i.test(ifName)) continue;
-      // Skip mgmt / out-of-band interfaces
-      if (/^(fxp|em|me|oob|mgmt)/i.test(ifName)) continue;
-
-      let networkKey;
-      const irbM = ifName.match(/^irb\.(\d+)/i);
-      if (irbM) {
-        // IRB interface → resolve VLAN name from VLAN ID
-        const vid = parseInt(irbM[1], 10);
-        networkKey = byId[vid] || `vlan${vid}`;
-      } else {
-        // Physical / LAG / VLAN-named interface — strip unit suffix
-        networkKey = ifName.replace(/\.\d+$/, '');
-      }
-
-      // Only include this network if it exists in the Mist networks map.
-      // Physical interface names (ge-0/0/48, ae1, etc.) are not valid
-      // Mist network keys and would cause Mist to silently drop the OSPF config.
-      if (vlans && !vlans[networkKey]) continue;
-
-      const entry = {
-        passive        : !!opts.passive,
-        interface_type : opts.ifaceType || 'broadcast',
-      };
-      networksMap[networkKey] = entry;
-    }
-
-    if (Object.keys(networksMap).length > 0) {
-      areasMap[areaId] = {
-        type    : 'default',   // default | stub | nssa
-        networks: networksMap,
+    // ospf_config.areas — all networks include interface_type
+    const configNetworks = {};
+    for (const [net, cfg] of Object.entries(networks)) {
+      configNetworks[net] = {
+        passive        : cfg.passive,
+        interface_type : cfg.ifaceType || 'broadcast',
       };
     }
+    configAreasMap[areaId] = { type: 'default', networks: configNetworks };
+
+    // ospf_areas — passive networks omit interface_type; area key is decimal
+    const decimalId   = areaIdToDecimal(areaId);
+    const areaNetworks = {};
+    for (const [net, cfg] of Object.entries(networks)) {
+      areaNetworks[net] = cfg.passive
+        ? { passive: true }
+        : { passive: false, interface_type: cfg.ifaceType || 'broadcast' };
+    }
+    areasMap[decimalId] = {
+      type            : 'default',
+      networks        : areaNetworks,
+      include_loopback: false,
+    };
   }
 
-  if (!Object.keys(areasMap).length) return null;
-  return { enabled: true, areas: areasMap };
+  if (!Object.keys(configAreasMap).length) return { ospfConfig: null, ospfAreas: null };
+
+  return {
+    ospfConfig: { enabled: true, areas: configAreasMap },
+    ospfAreas : areasMap,
+  };
 }
 
 function buildMistSnmp(communities, contact, location, trapHosts) {
@@ -2465,9 +2489,14 @@ function convert(configText, templateName, rootPassword = '') {
     extra_routes:  staticRoutes && Object.keys(staticRoutes).length  ? staticRoutes  : {},
     extra_routes6: {},
     routing_policies: {},
-    ...(ospfAreas && Object.keys(ospfAreas).length
-        ? { ospf_config: buildMistOspf(ospfAreas, byId, vlans) }
-        : {}),
+    ...(() => {
+      if (!ospfAreas || !Object.keys(ospfAreas).length) return {};
+      const { ospfConfig, ospfAreas: mistOspfAreas } = buildMistOspf(ospfAreas, byId, vlans);
+      const out = {};
+      if (ospfConfig)    out.ospf_config = ospfConfig;
+      if (mistOspfAreas) out.ospf_areas  = mistOspfAreas;
+      return out;
+    })(),
     port_mirroring: {},
     bgp_config: null,
     additional_config_cmds: addlCmds,
