@@ -1623,37 +1623,52 @@ function buildMistTacacs(servers) {
 
 // ── OSPF builder ───────────────────────────────────────────────
 // Converts Junos ospfAreas dict → Mist ospf_config object.
+// Mist uses object maps (not arrays) for both areas and networks:
+//   ospf_config.areas  = { "0.0.0.0": { type, networks: { VLAN: { passive, ... } } } }
 // IRB interfaces are resolved to VLAN names via byId.
 // Loopback (lo0) and management (fxp/em) interfaces are skipped.
 function buildMistOspf(ospfAreas, byId) {
   if (!Object.keys(ospfAreas).length) return null;
 
-  const areas = Object.entries(ospfAreas).map(([areaId, ifaces]) => {
-    const networks = [];
-    for (const [ifName, opts] of Object.entries(ifaces)) {
-      // Skip loopback — passive lo0.0 is internal bookkeeping, not a routed network
-      if (/^lo\d/i.test(ifName)) continue;
+  const areasMap = {};
 
-      let network;
+  for (const [areaId, ifaces] of Object.entries(ospfAreas)) {
+    const networksMap = {};
+
+    for (const [ifName, opts] of Object.entries(ifaces)) {
+      // Skip loopback — lo0.0 is internal bookkeeping, not a routed L3 network
+      if (/^lo\d/i.test(ifName)) continue;
+      // Skip mgmt interfaces
+      if (/^(fxp|em|me|oob|mgmt)/i.test(ifName)) continue;
+
+      let networkKey;
       const irbM = ifName.match(/^irb\.(\d+)/i);
       if (irbM) {
         // IRB interface → resolve VLAN name from VLAN ID
         const vid = parseInt(irbM[1], 10);
-        network = byId[vid] || `vlan${vid}`;
+        networkKey = byId[vid] || `vlan${vid}`;
       } else {
-        // Physical / LAG uplink (ae0.0, ge-1/0/39.0 …) — strip unit suffix
-        network = ifName.replace(/\.\d+$/, '');
+        // Physical / LAG uplink — strip unit suffix (ge-0/0/48.0 → ge-0/0/48)
+        networkKey = ifName.replace(/\.\d+$/, '');
       }
 
-      const entry = { network, passive: !!opts.passive };
-      if (opts.ifaceType) entry.interface_type = opts.ifaceType;
-      networks.push(entry);
+      const entry = {
+        passive        : !!opts.passive,
+        interface_type : opts.ifaceType || 'broadcast',
+      };
+      networksMap[networkKey] = entry;
     }
-    return { area_id: areaId, networks };
-  }).filter(a => a.networks.length > 0);
 
-  if (!areas.length) return null;
-  return { enabled: true, areas };
+    if (Object.keys(networksMap).length > 0) {
+      areasMap[areaId] = {
+        type    : 'default',   // default | stub | nssa
+        networks: networksMap,
+      };
+    }
+  }
+
+  if (!Object.keys(areasMap).length) return null;
+  return { enabled: true, areas: areasMap };
 }
 
 function buildMistSnmp(communities, contact, location, trapHosts) {
