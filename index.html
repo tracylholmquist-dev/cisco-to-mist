@@ -1626,8 +1626,11 @@ function buildMistTacacs(servers) {
 // Mist uses object maps (not arrays) for both areas and networks:
 //   ospf_config.areas  = { "0.0.0.0": { type, networks: { VLAN: { passive, ... } } } }
 // IRB interfaces are resolved to VLAN names via byId.
-// Loopback (lo0) and management (fxp/em) interfaces are skipped.
-function buildMistOspf(ospfAreas, byId) {
+// Only networks that exist in the vlans map are included — physical
+// interface names (ge-0/0/48, ae0, etc.) are NOT valid Mist network keys
+// and would cause Mist to reject the ospf_config block.
+// Loopback (lo0) and management (fxp/em) interfaces are always skipped.
+function buildMistOspf(ospfAreas, byId, vlans) {
   if (!Object.keys(ospfAreas).length) return null;
 
   const areasMap = {};
@@ -1638,7 +1641,7 @@ function buildMistOspf(ospfAreas, byId) {
     for (const [ifName, opts] of Object.entries(ifaces)) {
       // Skip loopback — lo0.0 is internal bookkeeping, not a routed L3 network
       if (/^lo\d/i.test(ifName)) continue;
-      // Skip mgmt interfaces
+      // Skip mgmt / out-of-band interfaces
       if (/^(fxp|em|me|oob|mgmt)/i.test(ifName)) continue;
 
       let networkKey;
@@ -1648,9 +1651,14 @@ function buildMistOspf(ospfAreas, byId) {
         const vid = parseInt(irbM[1], 10);
         networkKey = byId[vid] || `vlan${vid}`;
       } else {
-        // Physical / LAG uplink — strip unit suffix (ge-0/0/48.0 → ge-0/0/48)
+        // Physical / LAG / VLAN-named interface — strip unit suffix
         networkKey = ifName.replace(/\.\d+$/, '');
       }
+
+      // Only include this network if it exists in the Mist networks map.
+      // Physical interface names (ge-0/0/48, ae1, etc.) are not valid
+      // Mist network keys and would cause Mist to silently drop the OSPF config.
+      if (vlans && !vlans[networkKey]) continue;
 
       const entry = {
         passive        : !!opts.passive,
@@ -2432,7 +2440,7 @@ function convert(configText, templateName, rootPassword = '') {
     extra_routes6: {},
     routing_policies: {},
     ...(ospfAreas && Object.keys(ospfAreas).length
-        ? { ospf_config: buildMistOspf(ospfAreas, byId) }
+        ? { ospf_config: buildMistOspf(ospfAreas, byId, vlans) }
         : {}),
     port_mirroring: {},
     bgp_config: null,
