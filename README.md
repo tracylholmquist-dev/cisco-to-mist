@@ -1,16 +1,28 @@
-# Cisco → Mist Wired Assurance Converter
+[README.md](https://github.com/user-attachments/files/26938492/README.md)
+# Multi-Vendor Switch Config → Juniper Mist Wired Assurance Converter
 
-A browser-based tool that converts Cisco IOS switch CLI configurations into Juniper Mist Wired Assurance org-level network templates, then pushes them directly to the Mist API — no terminal required.
-
-**Live tool:** https://github.com/tracylholmquist-dev/cisco-to-mist
+A browser-based tool that converts CLI switch configurations from Cisco IOS/IOS-XE, Juniper EX (Junos), Arista EOS, and Aruba CX into Juniper Mist Wired Assurance org-level network templates, then pushes them directly to the Mist API — no terminal required.
 
 ---
 
 ## Problem Statement
 
-Network engineers migrating from Cisco IOS switching to Juniper Mist Wired Assurance must manually translate switch configurations between two fundamentally different paradigms. Cisco uses interface-level CLI commands; Mist uses a declarative JSON API with shared port-usage profiles, VLAN networks, and port-range notation. This translation is time-consuming, error-prone, and requires deep knowledge of both platforms.
+Network engineers migrating to Juniper Mist Wired Assurance must manually translate switch configurations between fundamentally different paradigms. Vendor CLIs use interface-level commands; Mist uses a declarative JSON API with shared port-usage profiles, VLAN networks, and port-range notation. This translation is time-consuming, error-prone, and requires deep knowledge of both platforms.
 
-This tool automates the conversion. An engineer pastes a Cisco running-config, reviews the generated Mist JSON, and pushes the resulting org-level network template to their Mist org in a single browser session.
+This tool automates the conversion. An engineer pastes a running-config (or drags and drops a config file), reviews the generated Mist JSON, and pushes the resulting org-level network template directly to their Mist org in a single browser session.
+
+---
+
+## Supported Vendors
+
+| Vendor | Platform | Config Style |
+|---|---|---|
+| Cisco IOS / IOS-XE | Catalyst 9000, 3850, 2960 | `interface GigabitEthernet1/0/1` |
+| Juniper EX (Junos) | EX2300, EX3400, EX4300 | `set vlans DATA vlan-id 10` (set-style and hierarchical) |
+| Arista EOS | DCS-7000 series | `interface Ethernet1` |
+| Aruba CX (AOS-CX) | CX 6000/6100/6300 | `interface 1/1/1` |
+
+The vendor is detected automatically from the config syntax — no manual selection required.
 
 ---
 
@@ -22,9 +34,11 @@ This tool automates the conversion. An engineer pastes a Cisco running-config, r
 │                                     │
 │  ┌───────────────────────────────┐  │
 │  │  index.html                   │  │
-│  │  • Cisco config parser        │  │
-│  │  • Mist JSON builder          │  │
+│  │  • Vendor auto-detection      │  │
+│  │  • Per-vendor config parsers  │  │
+│  │  • Mist JSON template builder │  │
 │  │  • Port-range compressor      │  │
+│  │  • Conversion summary tab     │  │
 │  │  • Push / Test UI             │  │
 │  └──────────────┬────────────────┘  │
 └─────────────────│───────────────────┘
@@ -55,10 +69,20 @@ The serverless proxy is the key architectural decision. Browsers block direct cr
 
 ```
 cisco-to-mist/
-├── index.html                  # Single-page converter app (all logic inline)
-└── netlify/
-    └── functions/
-        └── mist-proxy.js       # Serverless CORS proxy for Mist API calls
+├── index.html                        # Single-page converter app (all logic inline)
+├── netlify/
+│   └── functions/
+│       └── mist-proxy.js             # Serverless CORS proxy for Mist API calls
+└── sample-configs/
+    ├── sample-cisco-ios-l2.cfg       # Cisco IOS — Layer-2 only
+    ├── sample-cisco-ios-l3-static.cfg # Cisco IOS — Layer-3, static routes
+    ├── sample-arista-eos-l2.cfg      # Arista EOS — Layer-2 only
+    ├── sample-arista-eos-l3-static.cfg # Arista EOS — Layer-3, static routes
+    ├── sample-aruba-cx-l2.cfg        # Aruba CX — Layer-2 only
+    ├── sample-aruba-cx-l3-static.cfg  # Aruba CX — Layer-3, static routes
+    ├── sample-junos-ex-l2.cfg        # Juniper EX — Layer-2 only
+    ├── sample-junos-ex-l3-static.cfg  # Juniper EX — Layer-3, static routes
+    └── sample-junos-ex.cfg           # Juniper EX — Layer-3 with OSPF (full example)
 ```
 
 ---
@@ -76,7 +100,7 @@ cisco-to-mist/
 
 2. **Log in to Netlify** → click **Add new site → Import from Git**.
 
-3. **Connect to GitHub** and select the `cisco-to-mist` repository.
+3. **Connect to GitHub** and select the repository.
 
 4. **Leave all build settings blank** — no build command, no publish directory override needed.
 
@@ -84,7 +108,7 @@ cisco-to-mist/
 
 Netlify automatically detects the `netlify/functions/` directory and deploys `mist-proxy.js` as a serverless function alongside the static HTML. The deployment takes roughly 30 seconds.
 
-6. **Optionally rename your site** under **Site configuration → General → Site details → Change site name** to get a memorable URL like `https://cisco-to-mist.netlify.app`.
+6. **Optionally rename your site** under **Site configuration → General → Site details → Change site name** to get a memorable URL.
 
 ### Local Development
 
@@ -95,8 +119,8 @@ Open `index.html` directly in a browser for conversion and JSON preview. Note: *
 ## Usage
 
 1. Open the tool URL in any browser.
-2. **Paste** your Cisco IOS switch running-config into the left panel, or **drag-and-drop** a `.txt` config file.
-3. Click **Convert** — the right panel shows the generated Mist JSON and a port mapping table.
+2. **Paste** your switch running-config into the left panel, or **drag-and-drop** a config file. The vendor is detected automatically.
+3. Click **Convert** — the right panel shows the generated Mist JSON and a port mapping table. Review the **Summary** tab for a human-readable breakdown of what was parsed.
 4. Open the **Push to Mist API** drawer and enter:
    - **Org ID** — found in Mist under Organization → Settings
    - **API Token** — generated in Mist under My Profile → API Token
@@ -109,75 +133,92 @@ Open `index.html` directly in a browser for conversion and JSON preview. Note: *
 
 ## What Gets Converted
 
-| Cisco Feature | Mist Equivalent |
+### VLANs and Networks
+
+| Source Config | Mist Field |
 |---|---|
-| `switchport mode access` | `port_usages` access profile |
-| `switchport mode trunk` | `port_usages` trunk profile |
-| `switchport trunk native vlan N` | `port_network` on trunk profile |
-| `switchport trunk allowed vlan ...` | `networks` list or `all_networks: true` |
-| `switchport access vlan N` | `port_network` on access profile |
-| `switchport voice vlan N` | `voip_network` on access profile |
-| `channel-group N mode active` | `aggregated: true`, `ae_idx: N` on physical ports |
-| `spanning-tree mode pvst` / `rapid-pvst` | `stp_config: { mode: "rstp" }` |
-| `spanning-tree portfast` | `stp_edge: true` on port profile |
-| Description starting with `AP` | Shared `Mist-APs` trunk profile (PoE on, all networks) |
-| Consecutive same-config ports | Mist port-range notation (`ge-0/0/3-7`) |
-| `interface VlanX / description Y` | VLAN name `Y` in `networks` object |
+| VLAN definitions (all vendors) | `networks` object — name, VLAN ID |
+| SVI / IRB IP address (L3 switches) | `networks[name].subnet` (IPv4) |
+| SVI / IRB IPv6 address | `networks[name].subnet6` |
+
+### Port Profiles (`port_usages`)
+
+| Source Config | Mist Equivalent |
+|---|---|
+| Access port with single VLAN | `port_usages` access profile, `port_network` |
+| Voice VLAN (`switchport voice vlan` / `vlan voice`) | `voip_network` on access profile |
+| Trunk port | `port_usages` trunk profile |
+| Trunk native VLAN | `port_network` on trunk profile |
+| Trunk allowed VLANs | `networks` list on trunk profile |
+| All VLANs trunk (`vlan members [all]`) | `all_networks: true` |
+| Description starting with `AP` or `AP-` | Shared `Mist-APs` trunk profile (PoE on, all networks) |
+| `spanning-tree portfast` / `port-type admin-edge` | `stp_edge: true` |
+| `channel-group N mode active` / `lag N` | `aggregated: true`, `ae_idx: N` |
+| Disabled interface | `disabled: true` |
+| PoE disabled | `poe_disabled: true` |
+| Consecutive ports with identical config | Compressed to Mist port-range notation (`ge-0/0/3-7`) |
+
+### Routing
+
+| Source Config | Mist Field |
+|---|---|
+| Static routes (all vendors, CIDR or dotted-mask) | `extra_routes` |
+| OSPF area and interface assignments (Junos) | `ospf_config` + `ospf_areas` |
+| OSPF passive interfaces | `passive: true` in OSPF networks |
+
+### Infrastructure
+
+| Source Config | Mist Field |
+|---|---|
+| NTP servers | `ntp_servers` |
+| DNS servers | `dns_servers` |
+| Domain name / DNS suffix | `dns_suffix` |
+| SNMP community, contact, location, trap hosts | `snmp_config` |
+| RADIUS servers | `radius_config` |
+| TACACS+ servers | `tacacs_configs` |
+| Syslog hosts | `remote_syslog` |
+| `spanning-tree mode rapid-pvst` / `rstp` | `stp_config.mode` |
+| `lldp run` / `lldp enable` | `additional_config_cmds` |
 | `dot1x system-auth-control` | `port_auth: "dot1x"` on applicable profiles |
-| NTP server | `ntp_servers` array |
-| SNMP community | `snmp_config` |
+| Local user accounts | `local_accounts` |
+| Login banner | `additional_config_cmds` |
 
-**Interface offset:** Cisco numbers interfaces from 1 (GigabitEthernet**1**/0/**1**); Junos from 0 (ge-**0**/0/**0**). The converter applies the offset automatically on all stack/port numbers.
+### Interface Numbering Offset
 
-**Port-channel interfaces** are not written to `port_config`. Only physical member ports are configured, with LACP fields (`aggregated`, `ae_idx`, `ae_disable_lacp`) applied directly to the member port entries.
+Cisco and Arista number interfaces from 1 (`GigabitEthernet1/0/1`, `Ethernet1`); Junos numbers from 0 (`ge-0/0/0`). The converter applies the offset automatically so all port-config keys use Junos-style numbering regardless of source vendor.
 
 ---
 
-## Example Output
+## Sample Configurations
 
-Given a Cisco interface block:
+The `sample-configs/` directory contains reference configs for all four vendors in two scenarios:
+
+**Layer-2 only** — pure L2 switching with a single management SVI and default gateway. Use these to validate VLAN, port profile, voice VLAN, trunk, and AP port conversion.
+
+**Layer-3 static routes** — full SVI/IRB gateways on every VLAN with static routes. Use these to validate subnet population in `networks` and `extra_routes`. All four L3 static configs produce identical Mist templates, making them useful for cross-vendor comparison testing.
+
+All sample configs share the same VLAN scheme and IP addressing:
+
+| VLAN | Name | Subnet |
+|---|---|---|
+| 10 | DATA | 192.168.10.0/24 |
+| 20 | VOICE | 192.168.20.0/24 |
+| 30 | GUEST | 192.168.30.0/24 |
+| 40 | SERVERS | 10.40.0.0/24 |
+| 99 | MGMT | 10.99.0.0/24 |
+
+---
+
+## Mist Template Fields Produced
+
+The converter generates an org-level network template compatible with:
 
 ```
-interface GigabitEthernet1/0/7
- description AP-Port
- switchport trunk native vlan 11
- switchport trunk allowed vlan 11,21,31,41
- switchport mode trunk
-!
-interface GigabitEthernet1/0/8
- description AP-Port
- switchport trunk native vlan 11
- switchport trunk allowed vlan 11,21,31,41
- switchport mode trunk
+POST /api/v1/orgs/{org_id}/networktemplates
+PUT  /api/v1/orgs/{org_id}/networktemplates/{template_id}
 ```
 
-The converter produces:
-
-```json
-{
-  "port_usages": {
-    "Mist-APs": {
-      "mode": "trunk",
-      "port_network": "management",
-      "all_networks": true,
-      "poe_disabled": false,
-      "stp_edge": false,
-      "description": "Mist AP trunk port"
-    }
-  },
-  "port_config": {
-    "ge-0/0/6-7": {
-      "usage": "Mist-APs",
-      "description": "AP-Port",
-      "critical": false,
-      "no_local_overwrite": false,
-      "dynamic_usage": null
-    }
-  }
-}
-```
-
-The two physical interfaces are compressed into a single port-range entry and share one named port profile.
+Top-level fields populated: `name`, `networks`, `port_usages`, `port_config`, `radius_config`, `tacacs_configs`, `snmp_config`, `remote_syslog`, `dhcp_snooping`, `ntp_servers`, `dns_servers`, `dns_suffix`, `extra_routes`, `extra_routes6`, `ospf_config`, `ospf_areas`, `stp_config`, `additional_config_cmds`, `local_accounts`.
 
 ---
 
@@ -200,11 +241,22 @@ The two physical interfaces are compressed into a single port-range entry and sh
 
 ---
 
+## Known Limitations
+
+- **OSPF:** Currently parsed from Junos configs only. Arista, Cisco, and Aruba OSPF support is planned.
+- **BGP / EIGRP / RIP:** Not converted. Dynamic routing protocols other than OSPF are not supported by the Mist wired template schema.
+- **Port-channel master interfaces:** Not written to `port_config`. Only physical member ports are configured, with LACP fields applied directly to the member entries.
+- **Policy maps / QoS:** Not converted.
+- **ACLs:** Not converted.
+- **VRFs:** Not converted (Mist templates use a single routing domain per template).
+
+---
+
 ## Mist API Reference
 
+- **API docs:** https://www.juniper.net/documentation/us/en/software/mist/automation-integration/
 - **Create template:** `POST /api/v1/orgs/{org_id}/networktemplates`
 - **Update template:** `PUT /api/v1/orgs/{org_id}/networktemplates/{template_id}`
-- **API docs:** https://www.juniper.net/documentation/us/en/software/mist/automation-integration/
 
 ---
 
