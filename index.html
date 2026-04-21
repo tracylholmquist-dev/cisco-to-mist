@@ -968,6 +968,27 @@ function networkFromCidr(cidr) {
   return `${net}/${prefixLen}`;
 }
 
+// ── Static route parsing (Cisco IOS / Arista / Aruba CX) ───────
+// Handles both CIDR notation  (ip route 0.0.0.0/0 10.99.0.254)
+// and dotted-mask notation    (ip route 0.0.0.0 0.0.0.0 10.99.0.254)
+
+function parseStaticRoutes(lines) {
+  const routes = {};
+  for (const line of lines) {
+    const s = line.trim();
+    let m;
+    // CIDR: ip route A.B.C.D/prefix next-hop [metric] [name ...]
+    if ((m = s.match(/^ip route\s+(\d+\.\d+\.\d+\.\d+\/\d+)\s+(\d+\.\d+\.\d+\.\d+)/))) {
+      routes[networkFromCidr(m[1])] = { via: m[2] };
+    }
+    // Dotted mask (Cisco IOS): ip route A.B.C.D M.M.M.M next-hop
+    else if ((m = s.match(/^ip route\s+(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)/))) {
+      routes[cidrFromIpMask(m[1], m[2])] = { via: m[3] };
+    }
+  }
+  return routes;
+}
+
 // ── Interface parsing ──────────────────────────────────────────
 
 function parseInterfaces(lines) {
@@ -1751,6 +1772,7 @@ function parseCiscoConfig(text) {
     lldpEnabled   : lines.some(l => /^lldp run/.test(l.trim())),
     hasDot1x      : lines.some(l => /dot1x system-auth-control/.test(l.trim())),
     addlCmds      : hostnameMatch ? [`# Original hostname: ${hostnameMatch[1]}`] : [],
+    staticRoutes  : parseStaticRoutes(lines),
   };
 }
 
@@ -2305,6 +2327,7 @@ function parseArubaCXConfig(text) {
     dhcpSnooping  : { enabled: true, all_networks: true, enable_arp_spoof_check: false, enable_ip_source_guard: false },
     hostname, stpModeStr, lldpEnabled, hasDot1x: false,
     addlCmds      : hostname ? [`# Original hostname: ${hostname}`] : [],
+    staticRoutes  : parseStaticRoutes(lines),
   };
 }
 
@@ -2374,6 +2397,7 @@ function parseAristaConfig(text) {
     lldpEnabled    : lines.some(l => /^lldp run/.test(l.trim())),
     hasDot1x       : lines.some(l => /dot1x system-auth-control/.test(l.trim())),
     addlCmds       : hostnameMatch ? [`# Original hostname: ${hostnameMatch[1]}`] : [],
+    staticRoutes   : parseStaticRoutes(lines),
   };
 }
 
