@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en" data-theme="dark">
 <head>
@@ -2207,7 +2206,7 @@ function parseArubaCXConfig(text) {
   const vlans = {}, byId = {}, rawIfaces = {}, localAccounts = {};
   let loginBanner = '', hostname = '', domain = '';
   const ntpServers = [], dnsServers = [], radiusSrvs = [], tacacsSrvs = [];
-  const snmpComm = [], syslogHosts = [];
+  const syslogHosts = [];
   let stpModeStr = null, lldpEnabled = false;
   let curBlock = null, curVlan = null, inBanner = false, bannerDelim = '';
 
@@ -2281,8 +2280,6 @@ function parseArubaCXConfig(text) {
       { radiusSrvs.push({ host: m[1], secret: m[2], port: 1812 }); continue; }
     if ((m = s.match(/^tacacs-server host\s+(\S+)\s+key\s+"?([^"\s]+)"?/)))
       { tacacsSrvs.push({ host: m[1], secret: m[2], port: 49, timeout: 10 }); continue; }
-    if ((m = s.match(/^snmp-server community\s+(\S+)/)))
-      { snmpComm.push({ community: m[1], view: 'all' }); continue; }
     if ((m = s.match(/^logging\s+(\d+\.\d+\.\d+\.\d+)/)))    { syslogHosts.push(m[1]); continue; }
     if ((m = s.match(/^spanning-tree mode\s+(\S+)/)))
       { stpModeStr = m[1].toLowerCase().replace('rapid-pvst','rstp').replace('pvst','rstp'); continue; }
@@ -2331,7 +2328,7 @@ function parseArubaCXConfig(text) {
     vlans, byId, ifaces, localAccounts, loginBanner,
     radiusConfig  : buildMistRadius(radiusSrvs),
     tacacsConfig  : buildMistTacacs(tacacsSrvs),
-    snmpConfig    : buildMistSnmp(snmpComm, '', '', []),
+    snmpConfig    : parseSnmp(lines),
     ntpServers    : [...new Set(ntpServers)],
     dnsServers    : [...new Set(dnsServers)],
     dnsSuffix     : domain ? [domain] : [],
