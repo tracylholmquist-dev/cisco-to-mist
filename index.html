@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en" data-theme="dark">
 <head>
@@ -1221,8 +1222,9 @@ function buildPortUsages(ifaces, byId, vlans) {
         apPu.networks     = null;
         apPu.poe_disabled = false;   // APs require PoE
         apPu.stp_edge     = false;
-        // Set native/untagged VLAN (port_network) from this port's native VLAN
-        if (props.nativeVlan) apPu.port_network = vname(props.nativeVlan);
+        // Set native/untagged VLAN (port_network) — only when it resolves to a known network
+        // (skip VLAN 1 / unresolved VLANs that would produce a dangling reference)
+        if (props.nativeVlan && byId[props.nativeVlan]) apPu.port_network = vname(props.nativeVlan);
         portUsages['Mist-APs'] = apPu;
       }
       portConfigMap[junos] = {
@@ -1289,7 +1291,7 @@ function buildPortUsages(ifaces, byId, vlans) {
         if (props.accessVlan) pu.port_network = vname(props.accessVlan);
         if (props.voiceVlan)  pu.voip_network = vname(props.voiceVlan);
       } else if (mode === 'trunk') {
-        if (props.nativeVlan) pu.port_network = vname(props.nativeVlan);
+        if (props.nativeVlan && byId[props.nativeVlan]) pu.port_network = vname(props.nativeVlan);
         if (props.allNetworks) {
           // Junos vlan members [all] — carry all VLANs
           pu.all_networks = true;
@@ -1570,9 +1572,11 @@ function parseNtp(lines) {
 
 function parseDns(lines) {
   const servers = [];
+  const isIp = t => /^\d{1,3}(?:\.\d{1,3}){3}$/.test(t) || /^[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{0,4})+$/.test(t);
   for (const l of lines) {
     const m = l.trim().match(/^ip name-server\s+(.+)/);
-    if (m) servers.push(...m[1].trim().split(/\s+/));
+    // Arista uses "ip name-server vrf <vrf> <ip>" — keep only IP-shaped tokens
+    if (m) servers.push(...m[1].trim().split(/\s+/).filter(isIp));
   }
   return [...new Set(servers)];
 }
@@ -1823,7 +1827,7 @@ function parseJunosSetStyle(text) {
   }
 
   for (const line of lines) {
-    const s = line.trim();
+    const s = line.trim().replace(/\s+/g, ' ');
     // Skip blank, comments, delete/deactivate lines
     if (!s || s.startsWith('#') || s.startsWith('delete ') || s.startsWith('deactivate ')) continue;
     let m;
@@ -2289,7 +2293,15 @@ function parseArubaCXConfig(text) {
       continue;
     }
     if ((m = s.match(/^banner\s+(?:motd|login)\s+(\S)(.*)/))) {
-      bannerDelim = m[1]; loginBanner = m[2] || ''; inBanner = true; continue;
+      bannerDelim = m[1];
+      const rest = m[2] || '';
+      const closeIdx = rest.indexOf(bannerDelim);
+      if (closeIdx !== -1) {
+        loginBanner = rest.substring(0, closeIdx).trim(); // single-line banner
+      } else {
+        loginBanner = rest; inBanner = true;              // multi-line banner
+      }
+      continue;
     }
   }
 
